@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Drawing;
+using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
@@ -17,26 +18,31 @@ namespace KinectProject
         private DateTime lastFrameTime = DateTime.MinValue;
         private const int TargetFrameRate = 30;
 
-        // More precise depth range for human body
-        private const ushort BODY_DETECTION_MIN_DEPTH = 500;  // 0.5m
+        // Depth range for human body
+        private const ushort BODY_DETECTION_MIN_DEPTH = 400;  // 0.5m
         private const ushort BODY_DETECTION_MAX_DEPTH = 2000; // 2m
         private const int DEPTH_WINDOW = 200; // Adjustable depth window in millimeters
 
-        // VARIABLES FOR SELECT TWO POINTS
+        // Variables for point selection
         private DepthFrameReader depthReader;
         private CoordinateMapper coordinateMapper;
-
         private Point clickPoint1 = Point.Empty;
         private Point clickPoint2 = Point.Empty;
-
         private CameraSpacePoint? selectedPoint1 = null;
         private CameraSpacePoint? selectedPoint2 = null;
+        private PictureBox depthPictureBox;
 
-        private PictureBox depthPictureBox; // Make this global if it's not already
-        ///////////////
-        /// <summary>
-        /// 
-        /// </summary>
+        // Zoom functionality
+        private float zoomFactor = 1.0f;
+        private Point zoomCenter = new Point(256, 212); // Center of 512x424 image
+        private const float ZOOM_INCREMENT = 0.25f;
+        private const float MAX_ZOOM = 4.0f;
+        private const float MIN_ZOOM = 0.5f;
+        private bool isPanning = false;
+        private Point panStart;
+        private Label zoomLabel;
+
+        // UI Controls
         ComboBox jointSelector1 = new ComboBox();
         ComboBox jointSelector2 = new ComboBox();
         Label depthDiffLabel = new Label();
@@ -58,56 +64,47 @@ namespace KinectProject
                 }
 
                 kinectSensor.Open();
-                ////////
-                ///
                 coordinateMapper = kinectSensor.CoordinateMapper;
                 depthReader = kinectSensor.DepthFrameSource.OpenReader();
-                // depthReader.FrameArrived += DepthReader_FrameArrived;
 
-              
-                ///////
                 multiSourceFrameReader = kinectSensor.OpenMultiSourceFrameReader(FrameSourceTypes.Depth | FrameSourceTypes.Body);
                 multiSourceFrameReader.MultiSourceFrameArrived += MultiSourceFrameReader_MultiSourceFrameArrived;
 
                 depthBitmap = new Bitmap(512, 424, PixelFormat.Format32bppRgb);
                 depthPixels = new byte[512 * 424 * 4];
 
-                // *** STEP 1: Create PictureBox First ***
-                 depthPictureBox = new PictureBox
+                // Create PictureBox
+                depthPictureBox = new PictureBox
                 {
-                    Dock = DockStyle.Fill,  // It will be resized automatically
+                    Dock = DockStyle.Fill,
                     SizeMode = PictureBoxSizeMode.StretchImage,
-                    BackColor = Color.Black // To make sure we see it
+                    BackColor = Color.Black
                 };
-                this.Controls.Add(depthPictureBox); // Add first
+                this.Controls.Add(depthPictureBox);
                 depthPictureBox.MouseClick += DepthPictureBox_MouseClick;
+                depthPictureBox.MouseDown += DepthPictureBox_MouseDown;
+                depthPictureBox.MouseMove += DepthPictureBox_MouseMove;
+                depthPictureBox.MouseUp += DepthPictureBox_MouseUp;
+                depthPictureBox.MouseWheel += DepthPictureBox_MouseWheel;
 
-                // *** STEP 2: Create a Panel for UI Elements ***
-                //Panel topPanel = new Panel
-                //{
-                //    Dock = DockStyle.Top,
-                //    Height = 80, // Fixed height for UI
-                //    BackColor = Color.LightGray
-                //};
-                //this.Controls.Add(topPanel); // Add second, so it stays on top
+                // Initialize zoom controls
+                InitializeZoomControls();
 
-                // *** STEP 3: Create Dropdowns ***
+                // Initialize joint selectors
                 jointSelector1.Items.AddRange(Enum.GetNames(typeof(JointType)));
                 jointSelector2.Items.AddRange(Enum.GetNames(typeof(JointType)));
-
                 jointSelector1.SelectedIndex = 0;
                 jointSelector2.SelectedIndex = 1;
 
-                jointSelector1.Location = new Point(10, 10);
-                jointSelector2.Location = new Point(150, 10);
-
-                depthDiffLabel.Location = new Point(10, 50);
+                jointSelector1.Location = new Point(10, 50);
+                jointSelector2.Location = new Point(150, 50);
+                depthDiffLabel.Location = new Point(10, 80);
+                depthDiffLabel.AutoSize = true;
                 depthDiffLabel.Text = "Depth Difference: - mm";
 
-                // Add UI elements to the panel
-                //topPanel.Controls.Add(jointSelector1);
-                //topPanel.Controls.Add(jointSelector2);
-                //topPanel.Controls.Add(depthDiffLabel);
+                this.Controls.Add(jointSelector1);
+                this.Controls.Add(jointSelector2);
+                this.Controls.Add(depthDiffLabel);
 
                 MessageBox.Show("Please stand 1-2 meters from the sensor for optimal body mapping.");
             }
@@ -117,6 +114,53 @@ namespace KinectProject
             }
         }
 
+        private void InitializeZoomControls()
+        {
+            // Zoom In Button
+            Button zoomInButton = new Button
+            {
+                Text = "+",
+                Location = new Point(10, 10),
+                Size = new Size(30, 30)
+            };
+            zoomInButton.Click += ZoomInButton_Click;
+            this.Controls.Add(zoomInButton);
+
+            // Zoom Out Button
+            Button zoomOutButton = new Button
+            {
+                Text = "-",
+                Location = new Point(50, 10),
+                Size = new Size(30, 30)
+            };
+            zoomOutButton.Click += ZoomOutButton_Click;
+            this.Controls.Add(zoomOutButton);
+
+            // Reset Zoom Button
+            Button resetZoomButton = new Button
+            {
+                Text = "Reset",
+                Location = new Point(90, 10),
+                Size = new Size(60, 30)
+            };
+            resetZoomButton.Click += ResetZoomButton_Click;
+            this.Controls.Add(resetZoomButton);
+
+            // Zoom level label
+            zoomLabel = new Label
+            {
+                Text = $"Zoom: {zoomFactor}x",
+                Location = new Point(160, 15),
+                AutoSize = true
+            };
+            this.Controls.Add(zoomLabel);
+
+            // Bring controls to front
+            zoomInButton.BringToFront();
+            zoomOutButton.BringToFront();
+            resetZoomButton.BringToFront();
+            zoomLabel.BringToFront();
+        }
 
         private void MultiSourceFrameReader_MultiSourceFrameArrived(object sender, MultiSourceFrameArrivedEventArgs e)
         {
@@ -163,10 +207,9 @@ namespace KinectProject
 
                 if (trackedBody == null) return;
 
-                // ***************************************
                 // Get selected joints from ComboBox
-                string jointName1 = jointSelector1.SelectedItem.ToString();
-                string jointName2 = jointSelector2.SelectedItem.ToString();
+                string jointName1 = jointSelector1.SelectedItem?.ToString() ?? "Head";
+                string jointName2 = jointSelector2.SelectedItem?.ToString() ?? "Neck";
 
                 // Convert selected joint names to JointType enum
                 JointType jointType1 = (JointType)Enum.Parse(typeof(JointType), jointName1);
@@ -184,10 +227,9 @@ namespace KinectProject
                 int depthDifference = Math.Abs(depth1 - depth2);
 
                 // Update the label
-                depthDiffLabel.Text = $"{jointName1}-{jointName2} Depth Diff: {depthDifference} mm";
-
-                // ***************************************
-
+                this.Invoke((MethodInvoker)delegate {
+                    depthDiffLabel.Text = $"{jointName1}-{jointName2} Depth Diff: {depthDifference} mm";
+                });
 
                 // Get spine base position for reference depth
                 CameraSpacePoint spineBase = trackedBody.Joints[JointType.SpineMid].Position;
@@ -196,12 +238,6 @@ namespace KinectProject
                 // Calculate adaptive depth window
                 ushort minDepth = (ushort)Math.Max(referenceDepth - DEPTH_WINDOW, BODY_DETECTION_MIN_DEPTH);
                 ushort maxDepth = (ushort)Math.Min(referenceDepth + DEPTH_WINDOW, BODY_DETECTION_MAX_DEPTH);
-
-                // Update depth range display
-                if (Controls.Count > 1 && Controls[1] is Label depthLabel)
-                {
-                    depthLabel.Text = $"Body Depth Range: {minDepth}mm - {maxDepth}mm";
-                }
 
                 Parallel.For(0, depthData.Length, i =>
                 {
@@ -251,6 +287,7 @@ namespace KinectProject
                 });
 
                 UpdateBitmap(width, height);
+                UpdateZoomedImage();
             }
             catch (Exception ex)
             {
@@ -275,64 +312,38 @@ namespace KinectProject
 
             Marshal.Copy(depthPixels, 0, bitmapData.Scan0, depthPixels.Length);
             depthBitmap.UnlockBits(bitmapData);
-
-            var pictureBox = Controls[0] as PictureBox;
-            if (pictureBox != null)
-            {
-                pictureBox.Image = depthBitmap;
-            }
         }
 
-        private void DepthPictureBox_MouseClickDis(object sender, MouseEventArgs e)
+        private void UpdateZoomedImage()
         {
-            if (depthBitmap == null || coordinateMapper == null || depthReader == null)
+            if (depthBitmap == null) return;
+
+            // Calculate the source rectangle based on zoom
+            int zoomWidth = (int)(512 / zoomFactor);
+            int zoomHeight = (int)(424 / zoomFactor);
+
+            Rectangle srcRect = new Rectangle(
+                Math.Max(0, Math.Min(zoomCenter.X - zoomWidth / 2, 512 - zoomWidth)),
+                Math.Max(0, Math.Min(zoomCenter.Y - zoomHeight / 2, 424 - zoomHeight)),
+                zoomWidth,
+                zoomHeight);
+
+            // Create a temporary bitmap for the zoomed view
+            Bitmap zoomedBitmap = new Bitmap(depthPictureBox.Width, depthPictureBox.Height);
+
+            using (Graphics g = Graphics.FromImage(zoomedBitmap))
             {
-                MessageBox.Show("Initialization error: Missing depthBitmap or coordinateMapper.");
-                return;
+                g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                g.DrawImage(depthBitmap,
+                            new Rectangle(0, 0, depthPictureBox.Width, depthPictureBox.Height),
+                            srcRect,
+                            GraphicsUnit.Pixel);
             }
 
-            int x = e.X * 512 / depthPictureBox.Width;   // Scale from PictureBox to depth image size
-            int y = e.Y * 424 / depthPictureBox.Height;
-
-            using (var frame = depthReader.AcquireLatestFrame())
-            {
-                if (frame == null)
-                {
-                    MessageBox.Show("No depth frame available.");
-                    return;
-                }
-
-                ushort[] depthData = new ushort[512 * 424];
-                frame.CopyFrameDataToArray(depthData);
-
-                int index = y * 512 + x;
-                ushort depth = depthData[index];
-
-                if (depth == 0) return;
-
-                DepthSpacePoint depthPoint = new DepthSpacePoint { X = x, Y = y };
-                CameraSpacePoint cameraPoint = coordinateMapper.MapDepthPointToCameraSpace(depthPoint, depth);
-
-                if (selectedPoint1 == null)
-                {
-                    selectedPoint1 = cameraPoint;
-                    MessageBox.Show("First point selected.");
-                }
-                else if (selectedPoint2 == null)
-                {
-                    selectedPoint2 = cameraPoint;
-                    float dx = selectedPoint1.Value.X - selectedPoint2.Value.X;
-                    float dy = selectedPoint1.Value.Y - selectedPoint2.Value.Y;
-                    float dz = selectedPoint1.Value.Z - selectedPoint2.Value.Z;
-
-                    float distance = (float)Math.Sqrt(dx * dx + dy * dy + dz * dz) * 1000; // in mm
-                    MessageBox.Show($"Distance: {distance:F2} mm");
-
-                    selectedPoint1 = null;
-                    selectedPoint2 = null;
-                }
-            }
+            depthPictureBox.Image = zoomedBitmap;
+            zoomLabel.Text = $"Zoom: {zoomFactor:F1}x";
         }
+
         private void DepthPictureBox_MouseClick(object sender, MouseEventArgs e)
         {
             if (depthBitmap == null || coordinateMapper == null || depthReader == null)
@@ -341,8 +352,33 @@ namespace KinectProject
                 return;
             }
 
-            int x = e.X * 512 / depthPictureBox.Width;   // Scale from PictureBox to depth image size
-            int y = e.Y * 424 / depthPictureBox.Height;
+            // Calculate the actual coordinates in the depth image accounting for zoom
+            int x, y;
+
+            if (zoomFactor == 1.0f)
+            {
+                x = e.X * 512 / depthPictureBox.Width;
+                y = e.Y * 424 / depthPictureBox.Height;
+            }
+            else
+            {
+                // Calculate the source rectangle (same as in UpdateZoomedImage)
+                int zoomWidth = (int)(512 / zoomFactor);
+                int zoomHeight = (int)(424 / zoomFactor);
+
+                Rectangle srcRect = new Rectangle(
+                    Math.Max(0, Math.Min(zoomCenter.X - zoomWidth / 2, 512 - zoomWidth)),
+                    Math.Max(0, Math.Min(zoomCenter.Y - zoomHeight / 2, 424 - zoomHeight)),
+                    zoomWidth,
+                    zoomHeight);
+
+                // Map click position to source image
+                x = srcRect.X + (int)(e.X * srcRect.Width / (float)depthPictureBox.Width);
+                y = srcRect.Y + (int)(e.Y * srcRect.Height / (float)depthPictureBox.Height);
+            }
+
+            // Update zoom center for panning
+            zoomCenter = new Point(x, y);
 
             using (var frame = depthReader.AcquireLatestFrame())
             {
@@ -368,7 +404,7 @@ namespace KinectProject
                 if (selectedPoint1 == null)
                 {
                     selectedPoint1 = cameraPoint;
-                    MessageBox.Show("First point selected.");
+                    MessageBox.Show($"First point selected at ({x},{y})");
                 }
                 else if (selectedPoint2 == null)
                 {
@@ -385,6 +421,71 @@ namespace KinectProject
                     selectedPoint2 = null;
                 }
             }
+
+            // Update the zoomed image to center on the clicked point
+            UpdateZoomedImage();
+        }
+
+        private void DepthPictureBox_MouseDown(object sender, MouseEventArgs e)
+        {
+            if (e.Button == MouseButtons.Left && zoomFactor > 1.0f)
+            {
+                isPanning = true;
+                panStart = e.Location;
+            }
+        }
+
+        private void DepthPictureBox_MouseMove(object sender, MouseEventArgs e)
+        {
+            if (isPanning)
+            {
+                // Calculate movement in source image coordinates
+                int dx = (int)((panStart.X - e.X) * (512 / zoomFactor) / depthPictureBox.Width);
+                int dy = (int)((panStart.Y - e.Y) * (424 / zoomFactor) / depthPictureBox.Height);
+
+                zoomCenter.X = Math.Max(0, Math.Min(512, zoomCenter.X + dx));
+                zoomCenter.Y = Math.Max(0, Math.Min(424, zoomCenter.Y + dy));
+
+                panStart = e.Location;
+                UpdateZoomedImage();
+            }
+        }
+
+        private void DepthPictureBox_MouseUp(object sender, MouseEventArgs e)
+        {
+            isPanning = false;
+        }
+
+        private void DepthPictureBox_MouseWheel(object sender, MouseEventArgs e)
+        {
+            if (e.Delta > 0)
+            {
+                zoomFactor = Math.Min(zoomFactor + ZOOM_INCREMENT, MAX_ZOOM);
+            }
+            else
+            {
+                zoomFactor = Math.Max(zoomFactor - ZOOM_INCREMENT, MIN_ZOOM);
+            }
+            UpdateZoomedImage();
+        }
+
+        private void ZoomInButton_Click(object sender, EventArgs e)
+        {
+            zoomFactor = Math.Min(zoomFactor + ZOOM_INCREMENT, MAX_ZOOM);
+            UpdateZoomedImage();
+        }
+
+        private void ZoomOutButton_Click(object sender, EventArgs e)
+        {
+            zoomFactor = Math.Max(zoomFactor - ZOOM_INCREMENT, MIN_ZOOM);
+            UpdateZoomedImage();
+        }
+
+        private void ResetZoomButton_Click(object sender, EventArgs e)
+        {
+            zoomFactor = 1.0f;
+            zoomCenter = new Point(256, 212);
+            UpdateZoomedImage();
         }
 
         protected override void OnFormClosing(FormClosingEventArgs e)
@@ -394,8 +495,4 @@ namespace KinectProject
             base.OnFormClosing(e);
         }
     }
-
-
-
 }
-
