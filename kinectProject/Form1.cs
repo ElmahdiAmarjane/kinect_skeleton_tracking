@@ -22,6 +22,21 @@ namespace KinectProject
         private const ushort BODY_DETECTION_MAX_DEPTH = 2000; // 2m
         private const int DEPTH_WINDOW = 200; // Adjustable depth window in millimeters
 
+        // VARIABLES FOR SELECT TWO POINTS
+        private DepthFrameReader depthReader;
+        private CoordinateMapper coordinateMapper;
+
+        private Point clickPoint1 = Point.Empty;
+        private Point clickPoint2 = Point.Empty;
+
+        private CameraSpacePoint? selectedPoint1 = null;
+        private CameraSpacePoint? selectedPoint2 = null;
+
+        private PictureBox depthPictureBox; // Make this global if it's not already
+        ///////////////
+        /// <summary>
+        /// 
+        /// </summary>
         ComboBox jointSelector1 = new ComboBox();
         ComboBox jointSelector2 = new ComboBox();
         Label depthDiffLabel = new Label();
@@ -43,7 +58,14 @@ namespace KinectProject
                 }
 
                 kinectSensor.Open();
+                ////////
+                ///
+                coordinateMapper = kinectSensor.CoordinateMapper;
+                depthReader = kinectSensor.DepthFrameSource.OpenReader();
+                // depthReader.FrameArrived += DepthReader_FrameArrived;
 
+              
+                ///////
                 multiSourceFrameReader = kinectSensor.OpenMultiSourceFrameReader(FrameSourceTypes.Depth | FrameSourceTypes.Body);
                 multiSourceFrameReader.MultiSourceFrameArrived += MultiSourceFrameReader_MultiSourceFrameArrived;
 
@@ -51,22 +73,23 @@ namespace KinectProject
                 depthPixels = new byte[512 * 424 * 4];
 
                 // *** STEP 1: Create PictureBox First ***
-                PictureBox depthPictureBox = new PictureBox
+                 depthPictureBox = new PictureBox
                 {
                     Dock = DockStyle.Fill,  // It will be resized automatically
                     SizeMode = PictureBoxSizeMode.StretchImage,
                     BackColor = Color.Black // To make sure we see it
                 };
                 this.Controls.Add(depthPictureBox); // Add first
+                depthPictureBox.MouseClick += DepthPictureBox_MouseClick;
 
                 // *** STEP 2: Create a Panel for UI Elements ***
-                Panel topPanel = new Panel
-                {
-                    Dock = DockStyle.Top,
-                    Height = 80, // Fixed height for UI
-                    BackColor = Color.LightGray
-                };
-                this.Controls.Add(topPanel); // Add second, so it stays on top
+                //Panel topPanel = new Panel
+                //{
+                //    Dock = DockStyle.Top,
+                //    Height = 80, // Fixed height for UI
+                //    BackColor = Color.LightGray
+                //};
+                //this.Controls.Add(topPanel); // Add second, so it stays on top
 
                 // *** STEP 3: Create Dropdowns ***
                 jointSelector1.Items.AddRange(Enum.GetNames(typeof(JointType)));
@@ -82,9 +105,9 @@ namespace KinectProject
                 depthDiffLabel.Text = "Depth Difference: - mm";
 
                 // Add UI elements to the panel
-                topPanel.Controls.Add(jointSelector1);
-                topPanel.Controls.Add(jointSelector2);
-                topPanel.Controls.Add(depthDiffLabel);
+                //topPanel.Controls.Add(jointSelector1);
+                //topPanel.Controls.Add(jointSelector2);
+                //topPanel.Controls.Add(depthDiffLabel);
 
                 MessageBox.Show("Please stand 1-2 meters from the sensor for optimal body mapping.");
             }
@@ -93,6 +116,7 @@ namespace KinectProject
                 MessageBox.Show("Error: " + ex.Message);
             }
         }
+
 
         private void MultiSourceFrameReader_MultiSourceFrameArrived(object sender, MultiSourceFrameArrivedEventArgs e)
         {
@@ -259,6 +283,110 @@ namespace KinectProject
             }
         }
 
+        private void DepthPictureBox_MouseClickDis(object sender, MouseEventArgs e)
+        {
+            if (depthBitmap == null || coordinateMapper == null || depthReader == null)
+            {
+                MessageBox.Show("Initialization error: Missing depthBitmap or coordinateMapper.");
+                return;
+            }
+
+            int x = e.X * 512 / depthPictureBox.Width;   // Scale from PictureBox to depth image size
+            int y = e.Y * 424 / depthPictureBox.Height;
+
+            using (var frame = depthReader.AcquireLatestFrame())
+            {
+                if (frame == null)
+                {
+                    MessageBox.Show("No depth frame available.");
+                    return;
+                }
+
+                ushort[] depthData = new ushort[512 * 424];
+                frame.CopyFrameDataToArray(depthData);
+
+                int index = y * 512 + x;
+                ushort depth = depthData[index];
+
+                if (depth == 0) return;
+
+                DepthSpacePoint depthPoint = new DepthSpacePoint { X = x, Y = y };
+                CameraSpacePoint cameraPoint = coordinateMapper.MapDepthPointToCameraSpace(depthPoint, depth);
+
+                if (selectedPoint1 == null)
+                {
+                    selectedPoint1 = cameraPoint;
+                    MessageBox.Show("First point selected.");
+                }
+                else if (selectedPoint2 == null)
+                {
+                    selectedPoint2 = cameraPoint;
+                    float dx = selectedPoint1.Value.X - selectedPoint2.Value.X;
+                    float dy = selectedPoint1.Value.Y - selectedPoint2.Value.Y;
+                    float dz = selectedPoint1.Value.Z - selectedPoint2.Value.Z;
+
+                    float distance = (float)Math.Sqrt(dx * dx + dy * dy + dz * dz) * 1000; // in mm
+                    MessageBox.Show($"Distance: {distance:F2} mm");
+
+                    selectedPoint1 = null;
+                    selectedPoint2 = null;
+                }
+            }
+        }
+        private void DepthPictureBox_MouseClick(object sender, MouseEventArgs e)
+        {
+            if (depthBitmap == null || coordinateMapper == null || depthReader == null)
+            {
+                MessageBox.Show("Initialization error: Missing depthBitmap or coordinateMapper.");
+                return;
+            }
+
+            int x = e.X * 512 / depthPictureBox.Width;   // Scale from PictureBox to depth image size
+            int y = e.Y * 424 / depthPictureBox.Height;
+
+            using (var frame = depthReader.AcquireLatestFrame())
+            {
+                if (frame == null)
+                {
+                    MessageBox.Show("No depth frame available.");
+                    return;
+                }
+
+                ushort[] depthData = new ushort[512 * 424];
+                frame.CopyFrameDataToArray(depthData);
+
+                int index = y * 512 + x;
+                ushort depth = depthData[index];
+
+                if (depth == 0) return;  // Skip if no valid depth
+
+                // Map the depth point to camera space
+                DepthSpacePoint depthPoint = new DepthSpacePoint { X = x, Y = y };
+                CameraSpacePoint cameraPoint = coordinateMapper.MapDepthPointToCameraSpace(depthPoint, depth);
+
+                // Select the points and calculate depth difference
+                if (selectedPoint1 == null)
+                {
+                    selectedPoint1 = cameraPoint;
+                    MessageBox.Show("First point selected.");
+                }
+                else if (selectedPoint2 == null)
+                {
+                    selectedPoint2 = cameraPoint;
+
+                    // Calculate depth difference (Z-axis difference)
+                    float depthDifference = Math.Abs(selectedPoint1.Value.Z - selectedPoint2.Value.Z) * 1000; // in mm
+
+                    // Display the depth difference
+                    MessageBox.Show($"Depth Difference: {depthDifference:F2} mm");
+
+                    // Reset selected points for the next measurement
+                    selectedPoint1 = null;
+                    selectedPoint2 = null;
+                }
+            }
+        }
+
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
             if (multiSourceFrameReader != null) multiSourceFrameReader.Dispose();
@@ -266,5 +394,8 @@ namespace KinectProject
             base.OnFormClosing(e);
         }
     }
+
+
+
 }
 
