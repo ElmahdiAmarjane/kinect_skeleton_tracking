@@ -1,11 +1,16 @@
 ﻿using System;
 using System.Drawing;
-using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using Microsoft.Kinect;
+using Microsoft.VisualBasic;
+using System.IO;
+using System.Linq;
+using System.Collections.Generic;
+
+
 
 namespace KinectProject
 {
@@ -18,31 +23,36 @@ namespace KinectProject
         private DateTime lastFrameTime = DateTime.MinValue;
         private const int TargetFrameRate = 30;
 
-        // Depth range for human body
-        private const ushort BODY_DETECTION_MIN_DEPTH = 400;  // 0.5m
+        // More precise depth range for human body
+        private const ushort BODY_DETECTION_MIN_DEPTH = 500;  // 0.5m
         private const ushort BODY_DETECTION_MAX_DEPTH = 2000; // 2m
         private const int DEPTH_WINDOW = 200; // Adjustable depth window in millimeters
 
-        // Variables for point selection
+        // VARIABLES FOR SELECT TWO POINTS
         private DepthFrameReader depthReader;
         private CoordinateMapper coordinateMapper;
+
         private Point clickPoint1 = Point.Empty;
         private Point clickPoint2 = Point.Empty;
+
         private CameraSpacePoint? selectedPoint1 = null;
         private CameraSpacePoint? selectedPoint2 = null;
-        private PictureBox depthPictureBox;
 
-        // Zoom functionality
-        private float zoomFactor = 1.0f;
-        private Point zoomCenter = new Point(256, 212); // Center of 512x424 image
-        private const float ZOOM_INCREMENT = 0.25f;
-        private const float MAX_ZOOM = 4.0f;
-        private const float MIN_ZOOM = 0.5f;
-        private bool isPanning = false;
-        private Point panStart;
-        private Label zoomLabel;
+        private PictureBox depthPictureBox; // Make this global if it's not already
+        private PictureBox sideBox;
 
-        // UI Controls
+        private List<System.Drawing.PointF> lastSmoothedPoints = new List<System.Drawing.PointF>();
+
+        private List<System.Drawing.PointF> lastSmoothedSpinePoints = new List<System.Drawing.PointF>();
+
+        // En haut de la classe Form1 :
+        private int maxZIndex = -1;
+
+
+        ///////////////
+        /// <summary>
+        /// 
+        /// </summary>
         ComboBox jointSelector1 = new ComboBox();
         ComboBox jointSelector2 = new ComboBox();
         Label depthDiffLabel = new Label();
@@ -51,7 +61,6 @@ namespace KinectProject
         {
             InitializeComponent();
         }
-
         private void Form1_Load(object sender, EventArgs e)
         {
             try
@@ -64,102 +73,108 @@ namespace KinectProject
                 }
 
                 kinectSensor.Open();
+
                 coordinateMapper = kinectSensor.CoordinateMapper;
                 depthReader = kinectSensor.DepthFrameSource.OpenReader();
 
-                multiSourceFrameReader = kinectSensor.OpenMultiSourceFrameReader(FrameSourceTypes.Depth | FrameSourceTypes.Body);
+                multiSourceFrameReader = kinectSensor.OpenMultiSourceFrameReader(FrameSourceTypes.Depth | FrameSourceTypes.Body | FrameSourceTypes.Color);
                 multiSourceFrameReader.MultiSourceFrameArrived += MultiSourceFrameReader_MultiSourceFrameArrived;
 
                 depthBitmap = new Bitmap(512, 424, PixelFormat.Format32bppRgb);
                 depthPixels = new byte[512 * 424 * 4];
-
-                // Create PictureBox
+// === ÉTAPE 2 : Créer le PictureBox et l'ajouter après ===
                 depthPictureBox = new PictureBox
                 {
-                    Dock = DockStyle.Fill,
+                    Width = 500,
+                    Height = 424,
+                    Dock = DockStyle.Left,
                     SizeMode = PictureBoxSizeMode.StretchImage,
                     BackColor = Color.Black
                 };
-                this.Controls.Add(depthPictureBox);
+                this.Controls.Add(depthPictureBox); // Ajouté après le panel
                 depthPictureBox.MouseClick += DepthPictureBox_MouseClick;
-                depthPictureBox.MouseDown += DepthPictureBox_MouseDown;
-                depthPictureBox.MouseMove += DepthPictureBox_MouseMove;
-                depthPictureBox.MouseUp += DepthPictureBox_MouseUp;
-                depthPictureBox.MouseWheel += DepthPictureBox_MouseWheel;
+                ///////////////////////:
+                ///
+                // === PictureBox secondaire pour la courbe sagittale ===
+                 sideBox = new PictureBox
+                {
+                    Width = 350,
+                    Height = 424,
+                    Dock = DockStyle.Right,
+                    BackColor = Color.Black
+                };
+                this.Controls.Add(sideBox);
 
-                // Initialize zoom controls
-                InitializeZoomControls();
+                // 👉 Ajouter le suivi de la souris ici
+                sideBox.MouseMove += SideBox_MouseMove;
 
-                // Initialize joint selectors
+
+                ////////////////////////
+                // === ÉTAPE 1 : Créer le Panel pour les boutons et UI ===
+                Panel topPanel = new Panel
+                {
+                    Dock = DockStyle.Top,
+                    Height = 60,
+                    BackColor = Color.DarkGray
+                };
+                this.Controls.Add(topPanel); // Ajouté en premier !
+
+                
+
+                // === ÉTAPE 3 : Bouton Capture Vue 3D ===
+                Button captureBtn = new Button();
+                captureBtn.Text = "Capturer Vue 3D";
+                captureBtn.Location = new Point(10, 15);
+                captureBtn.Size = new Size(140, 30);
+                captureBtn.BackColor = Color.LightGreen;
+
+                captureBtn.Click += (s, args) =>
+                {
+                    string label = Microsoft.VisualBasic.Interaction.InputBox("Nom de la vue (ex: face, gauche...)", "Nom vue", "face");
+                    if (string.IsNullOrWhiteSpace(label)) return;
+
+                    string fileName = $"capture_{label}_{DateTime.Now:HHmmss}.ply";
+                    CapturePointCloud(fileName);
+                };
+                topPanel.Controls.Add(captureBtn);
+                ///////////////////////
+
+                Button sagittalBtn = new Button();
+                sagittalBtn.Text = "Capturer Courbe Sagittale";
+                sagittalBtn.Location = new Point(620, 15);
+                sagittalBtn.Size = new Size(180, 30);
+                sagittalBtn.BackColor = Color.LightBlue;
+                sagittalBtn.Click += SagittalBtn_Click;
+                topPanel.Controls.Add(sagittalBtn);
+
+
+                //////////////////////
+                // === ÉTAPE 4 : ComboBox pour les joints ===
                 jointSelector1.Items.AddRange(Enum.GetNames(typeof(JointType)));
                 jointSelector2.Items.AddRange(Enum.GetNames(typeof(JointType)));
+
                 jointSelector1.SelectedIndex = 0;
                 jointSelector2.SelectedIndex = 1;
 
-                jointSelector1.Location = new Point(10, 50);
-                jointSelector2.Location = new Point(150, 50);
-                depthDiffLabel.Location = new Point(10, 80);
-                depthDiffLabel.AutoSize = true;
+                jointSelector1.Location = new Point(160, 15);
+                jointSelector2.Location = new Point(310, 15);
+
+                topPanel.Controls.Add(jointSelector1);
+                topPanel.Controls.Add(jointSelector2);
+
+                // === ÉTAPE 5 : Label pour la différence de profondeur ===
+                depthDiffLabel.Location = new Point(470, 20);
                 depthDiffLabel.Text = "Depth Difference: - mm";
+                depthDiffLabel.AutoSize = true;
+                topPanel.Controls.Add(depthDiffLabel);
 
-                this.Controls.Add(jointSelector1);
-                this.Controls.Add(jointSelector2);
-                this.Controls.Add(depthDiffLabel);
-
-                MessageBox.Show("Please stand 1-2 meters from the sensor for optimal body mapping.");
+                // === Message d'information ===
+                MessageBox.Show("Veuillez vous placer à 1-2 mètres du capteur pour une détection optimale.");
             }
             catch (Exception ex)
             {
                 MessageBox.Show("Error: " + ex.Message);
             }
-        }
-
-        private void InitializeZoomControls()
-        {
-            // Zoom In Button
-            Button zoomInButton = new Button
-            {
-                Text = "+",
-                Location = new Point(10, 10),
-                Size = new Size(30, 30)
-            };
-            zoomInButton.Click += ZoomInButton_Click;
-            this.Controls.Add(zoomInButton);
-
-            // Zoom Out Button
-            Button zoomOutButton = new Button
-            {
-                Text = "-",
-                Location = new Point(50, 10),
-                Size = new Size(30, 30)
-            };
-            zoomOutButton.Click += ZoomOutButton_Click;
-            this.Controls.Add(zoomOutButton);
-
-            // Reset Zoom Button
-            Button resetZoomButton = new Button
-            {
-                Text = "Reset",
-                Location = new Point(90, 10),
-                Size = new Size(60, 30)
-            };
-            resetZoomButton.Click += ResetZoomButton_Click;
-            this.Controls.Add(resetZoomButton);
-
-            // Zoom level label
-            zoomLabel = new Label
-            {
-                Text = $"Zoom: {zoomFactor}x",
-                Location = new Point(160, 15),
-                AutoSize = true
-            };
-            this.Controls.Add(zoomLabel);
-
-            // Bring controls to front
-            zoomInButton.BringToFront();
-            zoomOutButton.BringToFront();
-            resetZoomButton.BringToFront();
-            zoomLabel.BringToFront();
         }
 
         private void MultiSourceFrameReader_MultiSourceFrameArrived(object sender, MultiSourceFrameArrivedEventArgs e)
@@ -191,6 +206,8 @@ namespace KinectProject
                 ushort[] depthData = new ushort[width * height];
                 depthFrame.CopyFrameDataToArray(depthData);
 
+               
+
                 Body[] bodies = new Body[bodyFrame.BodyCount];
                 bodyFrame.GetAndRefreshBodyData(bodies);
 
@@ -206,10 +223,13 @@ namespace KinectProject
                 }
 
                 if (trackedBody == null) return;
+                DrawSpineOnBitmap(trackedBody);
 
+
+                // ***************************************
                 // Get selected joints from ComboBox
-                string jointName1 = jointSelector1.SelectedItem?.ToString() ?? "Head";
-                string jointName2 = jointSelector2.SelectedItem?.ToString() ?? "Neck";
+                string jointName1 = jointSelector1.SelectedItem.ToString();
+                string jointName2 = jointSelector2.SelectedItem.ToString();
 
                 // Convert selected joint names to JointType enum
                 JointType jointType1 = (JointType)Enum.Parse(typeof(JointType), jointName1);
@@ -227,9 +247,10 @@ namespace KinectProject
                 int depthDifference = Math.Abs(depth1 - depth2);
 
                 // Update the label
-                this.Invoke((MethodInvoker)delegate {
-                    depthDiffLabel.Text = $"{jointName1}-{jointName2} Depth Diff: {depthDifference} mm";
-                });
+                depthDiffLabel.Text = $"{jointName1}-{jointName2} Depth Diff: {depthDifference} mm";
+
+                // ***************************************
+
 
                 // Get spine base position for reference depth
                 CameraSpacePoint spineBase = trackedBody.Joints[JointType.SpineMid].Position;
@@ -238,6 +259,12 @@ namespace KinectProject
                 // Calculate adaptive depth window
                 ushort minDepth = (ushort)Math.Max(referenceDepth - DEPTH_WINDOW, BODY_DETECTION_MIN_DEPTH);
                 ushort maxDepth = (ushort)Math.Min(referenceDepth + DEPTH_WINDOW, BODY_DETECTION_MAX_DEPTH);
+
+                // Update depth range display
+                if (Controls.Count > 1 && Controls[1] is Label depthLabel)
+                {
+                    depthLabel.Text = $"Body Depth Range: {minDepth}mm - {maxDepth}mm";
+                }
 
                 Parallel.For(0, depthData.Length, i =>
                 {
@@ -287,7 +314,8 @@ namespace KinectProject
                 });
 
                 UpdateBitmap(width, height);
-                UpdateZoomedImage();
+                DrawSpineOnBitmap(trackedBody);
+                depthPictureBox.Invalidate();
             }
             catch (Exception ex)
             {
@@ -312,38 +340,64 @@ namespace KinectProject
 
             Marshal.Copy(depthPixels, 0, bitmapData.Scan0, depthPixels.Length);
             depthBitmap.UnlockBits(bitmapData);
+
+            var pictureBox = Controls[0] as PictureBox;
+            if (pictureBox != null)
+            {
+                pictureBox.Image = depthBitmap;
+            }
         }
 
-        private void UpdateZoomedImage()
+        private void DepthPictureBox_MouseClickDis(object sender, MouseEventArgs e)
         {
-            if (depthBitmap == null) return;
-
-            // Calculate the source rectangle based on zoom
-            int zoomWidth = (int)(512 / zoomFactor);
-            int zoomHeight = (int)(424 / zoomFactor);
-
-            Rectangle srcRect = new Rectangle(
-                Math.Max(0, Math.Min(zoomCenter.X - zoomWidth / 2, 512 - zoomWidth)),
-                Math.Max(0, Math.Min(zoomCenter.Y - zoomHeight / 2, 424 - zoomHeight)),
-                zoomWidth,
-                zoomHeight);
-
-            // Create a temporary bitmap for the zoomed view
-            Bitmap zoomedBitmap = new Bitmap(depthPictureBox.Width, depthPictureBox.Height);
-
-            using (Graphics g = Graphics.FromImage(zoomedBitmap))
+            if (depthBitmap == null || coordinateMapper == null || depthReader == null)
             {
-                g.InterpolationMode = InterpolationMode.HighQualityBicubic;
-                g.DrawImage(depthBitmap,
-                            new Rectangle(0, 0, depthPictureBox.Width, depthPictureBox.Height),
-                            srcRect,
-                            GraphicsUnit.Pixel);
+                MessageBox.Show("Initialization error: Missing depthBitmap or coordinateMapper.");
+                return;
             }
 
-            depthPictureBox.Image = zoomedBitmap;
-            zoomLabel.Text = $"Zoom: {zoomFactor:F1}x";
-        }
+            int x = e.X * 512 / depthPictureBox.Width;   // Scale from PictureBox to depth image size
+            int y = e.Y * 424 / depthPictureBox.Height;
 
+            using (var frame = depthReader.AcquireLatestFrame())
+            {
+                if (frame == null)
+                {
+                    MessageBox.Show("No depth frame available.");
+                    return;
+                }
+
+                ushort[] depthData = new ushort[512 * 424];
+                frame.CopyFrameDataToArray(depthData);
+
+                int index = y * 512 + x;
+                ushort depth = depthData[index];
+
+                if (depth == 0) return;
+
+                DepthSpacePoint depthPoint = new DepthSpacePoint { X = x, Y = y };
+                CameraSpacePoint cameraPoint = coordinateMapper.MapDepthPointToCameraSpace(depthPoint, depth);
+
+                if (selectedPoint1 == null)
+                {
+                    selectedPoint1 = cameraPoint;
+                    MessageBox.Show("First point selected.");
+                }
+                else if (selectedPoint2 == null)
+                {
+                    selectedPoint2 = cameraPoint;
+                    float dx = selectedPoint1.Value.X - selectedPoint2.Value.X;
+                    float dy = selectedPoint1.Value.Y - selectedPoint2.Value.Y;
+                    float dz = selectedPoint1.Value.Z - selectedPoint2.Value.Z;
+
+                    float distance = (float)Math.Sqrt(dx * dx + dy * dy + dz * dz) * 1000; // in mm
+                    MessageBox.Show($"Distance: {distance:F2} mm");
+
+                    selectedPoint1 = null;
+                    selectedPoint2 = null;
+                }
+            }
+        }
         private void DepthPictureBox_MouseClick(object sender, MouseEventArgs e)
         {
             if (depthBitmap == null || coordinateMapper == null || depthReader == null)
@@ -352,33 +406,8 @@ namespace KinectProject
                 return;
             }
 
-            // Calculate the actual coordinates in the depth image accounting for zoom
-            int x, y;
-
-            if (zoomFactor == 1.0f)
-            {
-                x = e.X * 512 / depthPictureBox.Width;
-                y = e.Y * 424 / depthPictureBox.Height;
-            }
-            else
-            {
-                // Calculate the source rectangle (same as in UpdateZoomedImage)
-                int zoomWidth = (int)(512 / zoomFactor);
-                int zoomHeight = (int)(424 / zoomFactor);
-
-                Rectangle srcRect = new Rectangle(
-                    Math.Max(0, Math.Min(zoomCenter.X - zoomWidth / 2, 512 - zoomWidth)),
-                    Math.Max(0, Math.Min(zoomCenter.Y - zoomHeight / 2, 424 - zoomHeight)),
-                    zoomWidth,
-                    zoomHeight);
-
-                // Map click position to source image
-                x = srcRect.X + (int)(e.X * srcRect.Width / (float)depthPictureBox.Width);
-                y = srcRect.Y + (int)(e.Y * srcRect.Height / (float)depthPictureBox.Height);
-            }
-
-            // Update zoom center for panning
-            zoomCenter = new Point(x, y);
+            int x = e.X * 512 / depthPictureBox.Width;   // Scale from PictureBox to depth image size
+            int y = e.Y * 424 / depthPictureBox.Height;
 
             using (var frame = depthReader.AcquireLatestFrame())
             {
@@ -404,7 +433,7 @@ namespace KinectProject
                 if (selectedPoint1 == null)
                 {
                     selectedPoint1 = cameraPoint;
-                    MessageBox.Show($"First point selected at ({x},{y})");
+                    MessageBox.Show("First point selected.");
                 }
                 else if (selectedPoint2 == null)
                 {
@@ -421,71 +450,6 @@ namespace KinectProject
                     selectedPoint2 = null;
                 }
             }
-
-            // Update the zoomed image to center on the clicked point
-            UpdateZoomedImage();
-        }
-
-        private void DepthPictureBox_MouseDown(object sender, MouseEventArgs e)
-        {
-            if (e.Button == MouseButtons.Left && zoomFactor > 1.0f)
-            {
-                isPanning = true;
-                panStart = e.Location;
-            }
-        }
-
-        private void DepthPictureBox_MouseMove(object sender, MouseEventArgs e)
-        {
-            if (isPanning)
-            {
-                // Calculate movement in source image coordinates
-                int dx = (int)((panStart.X - e.X) * (512 / zoomFactor) / depthPictureBox.Width);
-                int dy = (int)((panStart.Y - e.Y) * (424 / zoomFactor) / depthPictureBox.Height);
-
-                zoomCenter.X = Math.Max(0, Math.Min(512, zoomCenter.X + dx));
-                zoomCenter.Y = Math.Max(0, Math.Min(424, zoomCenter.Y + dy));
-
-                panStart = e.Location;
-                UpdateZoomedImage();
-            }
-        }
-
-        private void DepthPictureBox_MouseUp(object sender, MouseEventArgs e)
-        {
-            isPanning = false;
-        }
-
-        private void DepthPictureBox_MouseWheel(object sender, MouseEventArgs e)
-        {
-            if (e.Delta > 0)
-            {
-                zoomFactor = Math.Min(zoomFactor + ZOOM_INCREMENT, MAX_ZOOM);
-            }
-            else
-            {
-                zoomFactor = Math.Max(zoomFactor - ZOOM_INCREMENT, MIN_ZOOM);
-            }
-            UpdateZoomedImage();
-        }
-
-        private void ZoomInButton_Click(object sender, EventArgs e)
-        {
-            zoomFactor = Math.Min(zoomFactor + ZOOM_INCREMENT, MAX_ZOOM);
-            UpdateZoomedImage();
-        }
-
-        private void ZoomOutButton_Click(object sender, EventArgs e)
-        {
-            zoomFactor = Math.Max(zoomFactor - ZOOM_INCREMENT, MIN_ZOOM);
-            UpdateZoomedImage();
-        }
-
-        private void ResetZoomButton_Click(object sender, EventArgs e)
-        {
-            zoomFactor = 1.0f;
-            zoomCenter = new Point(256, 212);
-            UpdateZoomedImage();
         }
 
         protected override void OnFormClosing(FormClosingEventArgs e)
@@ -494,5 +458,510 @@ namespace KinectProject
             if (kinectSensor != null) kinectSensor.Close();
             base.OnFormClosing(e);
         }
+        private void CapturePointCloud(string fileName)
+        {
+            var multiFrame = multiSourceFrameReader.AcquireLatestFrame();
+            if (multiFrame == null)
+            {
+                MessageBox.Show("MultiSourceFrame indisponible.");
+                return;
+            }
+
+            using (var depthFrame = multiFrame.DepthFrameReference.AcquireFrame())
+            using (var colorFrame = multiFrame.ColorFrameReference.AcquireFrame())
+            {
+                if (depthFrame == null || colorFrame == null)
+                {
+                    MessageBox.Show("DepthFrame ou ColorFrame indisponible.");
+                    return;
+                }
+
+                int width = depthFrame.FrameDescription.Width;
+                int height = depthFrame.FrameDescription.Height;
+
+                ushort[] depthData = new ushort[width * height];
+                depthFrame.CopyFrameDataToArray(depthData);
+
+                CameraSpacePoint[] cameraPoints = new CameraSpacePoint[width * height];
+                coordinateMapper.MapDepthFrameToCameraSpace(depthData, cameraPoints);
+
+                // Ta plage habituelle pour le corps (en mm converti en m)
+                const ushort BODY_DETECTION_MIN_DEPTH = 500;
+                const ushort BODY_DETECTION_MAX_DEPTH = 2000;
+                const int DEPTH_WINDOW = 200;
+
+                // Pour chaque point on calcule la couleur selon la profondeur autour de la base de la colonne vertébrale (SpineMid)
+                // Cherchons la profondeur de référence (si tu veux, sinon on peut prendre la moyenne des profondeurs valides)
+                // Ici, on prend la profondeur médiane des points valides pour plus de stabilité
+                var validDepths = depthData.Where(d => d >= BODY_DETECTION_MIN_DEPTH && d <= BODY_DETECTION_MAX_DEPTH).ToArray();
+                if (validDepths.Length == 0)
+                {
+                    MessageBox.Show("Aucune profondeur valide dans la plage.");
+                    return;
+                }
+                ushort referenceDepth = validDepths[validDepths.Length / 2];
+
+                // Fenêtre adaptative autour de cette profondeur
+                ushort minDepth = (ushort)Math.Max(referenceDepth - DEPTH_WINDOW, BODY_DETECTION_MIN_DEPTH);
+                ushort maxDepth = (ushort)Math.Min(referenceDepth + DEPTH_WINDOW, BODY_DETECTION_MAX_DEPTH);
+
+                // Compter points valides
+                int validPointsCount = 0;
+                for (int i = 0; i < cameraPoints.Length; i++)
+                {
+                    var cp = cameraPoints[i];
+                    if (float.IsInfinity(cp.X) || float.IsNaN(cp.X)) continue;
+
+                    // Convertir profondeur en mm
+                    int depthInMM = (int)(cp.Z * 1000);
+                    if (depthInMM < minDepth || depthInMM > maxDepth) continue;
+
+                    validPointsCount++;
+                }
+
+                using (var writer = new StreamWriter(fileName))
+                {
+                    // Écrire header PLY
+                    writer.WriteLine("ply");
+                    writer.WriteLine("format ascii 1.0");
+                    writer.WriteLine($"element vertex {validPointsCount}");
+                    writer.WriteLine("property float x");
+                    writer.WriteLine("property float y");
+                    writer.WriteLine("property float z");
+                    writer.WriteLine("property uchar red");
+                    writer.WriteLine("property uchar green");
+                    writer.WriteLine("property uchar blue");
+                    writer.WriteLine("end_header");
+
+                    for (int i = 0; i < cameraPoints.Length; i++)
+                    {
+                        var cp = cameraPoints[i];
+                        if (float.IsInfinity(cp.X) || float.IsNaN(cp.X)) continue;
+
+                        int depthInMM = (int)(cp.Z * 1000);
+                        if (depthInMM < minDepth || depthInMM > maxDepth) continue;
+
+                        // Normaliser profondeur entre minDepth et maxDepth
+                        double normalizedDepth = (depthInMM - minDepth) / (double)(maxDepth - minDepth);
+
+                        byte r, g, b;
+
+                        if (normalizedDepth < 0.33)
+                        {
+                            // Rouge à Jaune
+                            r = 255;
+                            g = (byte)(normalizedDepth * 3 * 255);
+                            b = 0;
+                        }
+                        else if (normalizedDepth < 0.66)
+                        {
+                            // Jaune à Vert
+                            r = (byte)((0.66 - normalizedDepth) * 3 * 255);
+                            g = 255;
+                            b = 0;
+                        }
+                        else
+                        {
+                            // Vert à Bleu
+                            r = 0;
+                            g = (byte)((1 - normalizedDepth) * 3 * 255);
+                            b = (byte)(normalizedDepth * 255);
+                        }
+
+                        writer.WriteLine($"{cp.X} {cp.Y} {cp.Z} {r} {g} {b}");
+                    }
+                }
+
+                MessageBox.Show($"Nuage de points 3D coloré selon profondeur enregistré :\n{fileName}");
+            }
+        }
+
+        // 29/06
+        private void DrawSpineOnBitmap(Body body)
+        {
+            if (body == null || coordinateMapper == null) return;
+
+            var joints = new JointType[]
+            {
+        JointType.SpineBase,
+        JointType.SpineMid,
+        JointType.SpineShoulder,
+        JointType.Neck,
+        JointType.Head
+            };
+
+            List<System.Drawing.PointF> spinePoints2D = new List<System.Drawing.PointF>();
+
+            foreach (var jointType in joints)
+            {
+                Joint joint = body.Joints[jointType];
+                if (joint.TrackingState == TrackingState.NotTracked)
+                    return;
+
+                DepthSpacePoint dp = coordinateMapper.MapCameraPointToDepthSpace(joint.Position);
+
+                if (float.IsNaN(dp.X) || float.IsNaN(dp.Y))
+                    return;
+
+                // Vérifier que le point est bien dans les limites de l'image (512x424)
+                if (dp.X >= 0 && dp.X < 512 && dp.Y >= 0 && dp.Y < 424)
+                {
+                    spinePoints2D.Add(new System.Drawing.PointF(dp.X, dp.Y));
+                }
+            }
+
+            // Tracer si au moins 2 points valides
+            if (spinePoints2D.Count >= 2)
+            {
+                using (Graphics g = Graphics.FromImage(depthBitmap))
+                using (Pen redPen = new Pen(Color.Red, 4))
+                {
+                    for (int i = 0; i < spinePoints2D.Count - 1; i++)
+                    {
+                        g.DrawLine(redPen, spinePoints2D[i], spinePoints2D[i + 1]);
+                    }
+                }
+            }
+        }
+
+        //03/07
+
+        // AJOUTER CETTE MÉTHODE DANS Form1
+        private void DrawDepthSpineCurve(ushort[] depthData)
+        {
+            int width = 512;
+            int height = 424;
+            int centerX = width / 2;
+            Bitmap sideView = new Bitmap(sideBox.Width, sideBox.Height);
+
+            List<System.Drawing.PointF> rawPoints = new List<System.Drawing.PointF>();
+            float maxZ = float.MinValue;
+             maxZIndex = -1;
+
+            // Sample multiple center columns and apply median filter
+            for (int y = 0; y < height; y += 1)
+            {
+                List<float> zSamples = new List<float>();
+                for (int dx = -2; dx <= 2; dx++) // 5 pixels around center
+                {
+                    int x = centerX + dx;
+                    if (x < 0 || x >= width) continue;
+
+                    int index = y * width + x;
+                    ushort depth = depthData[index];
+                    if (depth == 0 || depth < BODY_DETECTION_MIN_DEPTH || depth > BODY_DETECTION_MAX_DEPTH)
+                        continue;
+
+                    CameraSpacePoint cp = coordinateMapper.MapDepthPointToCameraSpace(
+                        new DepthSpacePoint { X = x, Y = y }, depth);
+
+                    zSamples.Add(cp.Z * 1000f); // in mm
+                }
+
+                if (zSamples.Count >= 3)
+                {
+                    float medianZ = zSamples.OrderBy(z => z).ElementAt(zSamples.Count / 2);
+                    rawPoints.Add(new System.Drawing.PointF(medianZ, y));
+
+                    if (medianZ > maxZ)
+                    {
+                        maxZ = medianZ;
+                        maxZIndex = rawPoints.Count - 1;
+                    }
+                }
+            }
+
+            if (rawPoints.Count < 5)
+            {
+                sideBox.Image = sideView;
+               
+
+
+                return;
+            }
+
+            // Cubic spline interpolation
+       
+            var filtered = FilterDepthPoints(rawPoints);
+            List<System.Drawing.PointF> smoothedPoints = InterpolateSpinePoints(filtered);
+
+            // Draw everything
+            using (Graphics g = Graphics.FromImage(sideView))
+            {
+                g.Clear(Color.Black);
+
+                using (Pen spinePen = new Pen(Color.Cyan, 3))
+                {
+                    for (int i = 1; i < smoothedPoints.Count; i++)
+                    {
+                        float x1 = 50 + smoothedPoints[i - 1].X * 0.1f;
+                        float y1 = smoothedPoints[i - 1].Y;
+                        float x2 = 50 + smoothedPoints[i].X * 0.1f;
+                        float y2 = smoothedPoints[i].Y;
+
+                        g.DrawLine(spinePen, x1, y1, x2, y2);
+                    }
+                }
+
+           
+
+                // Draw vertical line at deepest point
+                // MOVE this AFTER spline smoothing
+                float deepestZ = float.MinValue;
+                float deepestX = 0;
+
+                for (int i = 0; i < smoothedPoints.Count; i++)
+                {
+                    if (smoothedPoints[i].X > deepestZ)
+                    {
+                        deepestZ = smoothedPoints[i].X;
+                        deepestX = smoothedPoints[i].X;
+                    }
+                }
+
+                float refX = 50 + deepestX * 0.1f;
+                using (Pen redPen = new Pen(Color.Red, 2) { DashStyle = System.Drawing.Drawing2D.DashStyle.Dash })
+                {
+                    g.DrawLine(redPen, refX, 0, refX, sideView.Height);
+                }
+
+                // Label
+                g.DrawString($"Deepest Z: {deepestZ:F0} mm", new Font("Arial", 9), Brushes.White, refX + 5, 10);
+
+            }
+            lastSmoothedSpinePoints = smoothedPoints;
+
+            sideBox.Image = sideView;
+        }
+
+        private List<System.Drawing.PointF> SplineInterpolate(List<System.Drawing.PointF> points)
+        {
+            var result = new List<System.Drawing.PointF>();
+
+            for (int i = 1; i < points.Count - 2; i++)
+            {
+                System.Drawing.PointF p0 = points[i - 1];
+                System.Drawing.PointF p1 = points[i];
+                System.Drawing.PointF p2 = points[i + 1];
+                System.Drawing.PointF p3 = points[i + 2];
+
+                for (float t = 0; t <= 1; t += 0.2f)
+                {
+                    float t2 = t * t;
+                    float t3 = t2 * t;
+
+                    float x =
+                        0.5f * ((2 * p1.X) +
+                        (-p0.X + p2.X) * t +
+                        (2 * p0.X - 5 * p1.X + 4 * p2.X - p3.X) * t2 +
+                        (-p0.X + 3 * p1.X - 3 * p2.X + p3.X) * t3);
+
+                    float y =
+                        0.5f * ((2 * p1.Y) +
+                        (-p0.Y + p2.Y) * t +
+                        (2 * p0.Y - 5 * p1.Y + 4 * p2.Y - p3.Y) * t2 +
+                        (-p0.Y + 3 * p1.Y - 3 * p2.Y + p3.Y) * t3);
+
+                    result.Add(new System.Drawing.PointF(x, y));
+                }
+            }
+
+            return result;
+        }
+
+
+        private List<System.Drawing.PointF> InterpolateSpinePoints(List<System.Drawing.PointF> points)
+        {
+            List<System.Drawing.PointF> interpolated = new List<System.Drawing.PointF>();
+
+            for (int i = 0; i < points.Count - 3; i++)
+            {
+                System.Drawing.PointF p0 = points[i];
+                System.Drawing.PointF p1 = points[i + 1];
+                System.Drawing.PointF p2 = points[i + 2];
+                System.Drawing.PointF p3 = points[i + 3];
+
+                for (float t = 0; t <= 1; t += 0.05f)
+                {
+                    float t2 = t * t;
+                    float t3 = t2 * t;
+
+                    float x =
+                        0.5f * ((2 * p1.X) +
+                        (-p0.X + p2.X) * t +
+                        (2 * p0.X - 5 * p1.X + 4 * p2.X - p3.X) * t2 +
+                        (-p0.X + 3 * p1.X - 3 * p2.X + p3.X) * t3);
+
+                    float y =
+                        0.5f * ((2 * p1.Y) +
+                        (-p0.Y + p2.Y) * t +
+                        (2 * p0.Y - 5 * p1.Y + 4 * p2.Y - p3.Y) * t2 +
+                        (-p0.Y + 3 * p1.Y - 3 * p2.Y + p3.Y) * t3);
+
+                    interpolated.Add(new System.Drawing.PointF(x, y));
+                }
+            }
+
+            return interpolated;
+        }
+
+        ushort[] SmoothDepthData(ushort[] depthData, int width, int height)
+        {
+            ushort[] smoothed = new ushort[depthData.Length];
+            for (int y = 1; y < height - 1; y++)
+            {
+                for (int x = 1; x < width - 1; x++)
+                {
+                    int index = y * width + x;
+                    if (depthData[index] == 0) continue;
+
+                    // Average nearby pixels
+                    ushort sum = 0;
+                    int count = 0;
+                    for (int dy = -1; dy <= 1; dy++)
+                    {
+                        for (int dx = -1; dx <= 1; dx++)
+                        {
+                            int neighborIndex = (y + dy) * width + (x + dx);
+                            if (depthData[neighborIndex] > 0)
+                            {
+                                sum += depthData[neighborIndex];
+                                count++;
+                            }
+                        }
+                    }
+                    smoothed[index] = (ushort)(sum / Math.Max(1, count));
+                }
+            }
+            return smoothed;
+        }
+
+        private void SagittalBtn_Click(object sender, EventArgs e)
+        {
+            var multiFrame = multiSourceFrameReader.AcquireLatestFrame();
+            if (multiFrame == null) return;
+
+            using (var depthFrame = multiFrame.DepthFrameReference.AcquireFrame())
+            {
+                if (depthFrame == null) return;
+
+                int width = depthFrame.FrameDescription.Width;
+                int height = depthFrame.FrameDescription.Height;
+
+                ushort[] depthData = new ushort[width * height];
+                depthFrame.CopyFrameDataToArray(depthData);
+
+                ushort[] smooth = SmoothDepthData(depthData, width, height);
+                DrawDepthSpineCurve(smooth); // 🎯 appelle uniquement ici !
+            }
+        }
+
+
+        private void SideBox_MouseMove(object sender, MouseEventArgs e)
+        {
+            if (lastSmoothedSpinePoints == null || lastSmoothedSpinePoints.Count == 0 || maxZIndex < 0 || maxZIndex >= lastSmoothedSpinePoints.Count)
+                return;
+
+            Bitmap sideView = new Bitmap(sideBox.Width, sideBox.Height);
+            using (Graphics g = Graphics.FromImage(sideView))
+            {
+                g.Clear(Color.Black);
+
+                // 1. Redessiner la courbe
+                using (Pen pen = new Pen(Color.Cyan, 3))
+                {
+                    for (int i = 1; i < lastSmoothedSpinePoints.Count; i++)
+                    {
+                        float x1 = 50 + lastSmoothedSpinePoints[i - 1].X * 0.1f;
+                        float y1 = lastSmoothedSpinePoints[i - 1].Y;
+                        float x2 = 50 + lastSmoothedSpinePoints[i].X * 0.1f;
+                        float y2 = lastSmoothedSpinePoints[i].Y;
+                        g.DrawLine(pen, x1, y1, x2, y2);
+                    }
+                }
+
+                // 2. Dessiner la ligne verticale rouge
+                float refX = 50 + lastSmoothedSpinePoints[maxZIndex].X * 0.1f;
+                using (Pen redPen = new Pen(Color.Red, 2) { DashStyle = System.Drawing.Drawing2D.DashStyle.Dash })
+                {
+                    g.DrawLine(redPen, refX, 0, refX, sideView.Height);
+                }
+
+                g.DrawString($"Deepest Z: {lastSmoothedSpinePoints[maxZIndex].X:F0} mm", new Font("Arial", 9), Brushes.White, refX + 5, 10);
+
+                // 3. Trouver le point le plus proche du curseur
+                float minDistance = 10f;
+                System.Drawing.PointF? closestPoint = null;
+
+                foreach (var pt in lastSmoothedSpinePoints)
+                {
+                    float x = 50 + pt.X * 0.1f;
+                    float y = pt.Y;
+
+                    float dx = e.X - x;
+                    float dy = e.Y - y;
+                    float dist = (float)Math.Sqrt(dx * dx + dy * dy);
+
+                    if (dist < minDistance)
+                    {
+                        minDistance = dist;
+                        closestPoint = pt;
+                    }
+                }
+
+                // 4. Si trouvé : afficher Z + décalage
+                if (closestPoint != null)
+                {
+                    float zPoint = closestPoint.Value.X; // profondeur du point (en mm)
+                    float zRef = lastSmoothedSpinePoints[maxZIndex].X; // profondeur verticale rouge
+                    float lateralDistance = Math.Abs(zPoint - zRef); // différence en mm
+
+                    float x = 50 + closestPoint.Value.X * 0.1f;
+                    float y = closestPoint.Value.Y;
+
+                    string label = $"Z: {zPoint:F1} mm\nDécalage: {lateralDistance:F1} mm";
+
+                    g.DrawString(label, new Font("Arial", 9), Brushes.Yellow, x + 5, y - 25);
+                    g.FillEllipse(Brushes.Yellow, x - 3, y - 3, 6, 6);
+                }
+            }
+
+            sideBox.Image?.Dispose();
+            sideBox.Image = sideView;
+        }
+
+
+        private void DrawVerticalLine(Graphics g, float xPosition, float height, Color color, string label = null)
+        {
+            using (Pen redPen = new Pen(color, 2) { DashStyle = System.Drawing.Drawing2D.DashStyle.Dash })
+            {
+                g.DrawLine(redPen, xPosition, 0, xPosition, height);
+            }
+
+            if (!string.IsNullOrEmpty(label))
+            {
+                using (Font font = new Font("Arial", 9))
+                {
+                    g.DrawString(label, font, Brushes.White, xPosition + 5, 10);
+                }
+            }
+        }
+
+        private List<System.Drawing.PointF> FilterDepthPoints(List<System.Drawing.PointF> points)
+        {
+            List<System.Drawing.PointF> filtered = new List<System.Drawing.PointF>();
+            for (int i = 1; i < points.Count - 1; i++)
+            {
+                float x = (points[i - 1].X + points[i].X + points[i + 1].X) / 3f;
+                float y = points[i].Y; // garde Y intact
+                filtered.Add(new System.Drawing.PointF(x, y));
+            }
+            return filtered;
+        }
+
+
     }
+
+
+
 }
