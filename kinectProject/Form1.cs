@@ -48,6 +48,8 @@ namespace KinectProject
         // En haut de la classe Form1 :
         private int maxZIndex = -1;
 
+        private float fixedDeepestXPixel = -1;  // ← position en pixels sur le sideBox (avec échelle)
+
 
         ///////////////
         /// <summary>
@@ -348,56 +350,6 @@ namespace KinectProject
             }
         }
 
-        private void DepthPictureBox_MouseClickDis(object sender, MouseEventArgs e)
-        {
-            if (depthBitmap == null || coordinateMapper == null || depthReader == null)
-            {
-                MessageBox.Show("Initialization error: Missing depthBitmap or coordinateMapper.");
-                return;
-            }
-
-            int x = e.X * 512 / depthPictureBox.Width;   // Scale from PictureBox to depth image size
-            int y = e.Y * 424 / depthPictureBox.Height;
-
-            using (var frame = depthReader.AcquireLatestFrame())
-            {
-                if (frame == null)
-                {
-                    MessageBox.Show("No depth frame available.");
-                    return;
-                }
-
-                ushort[] depthData = new ushort[512 * 424];
-                frame.CopyFrameDataToArray(depthData);
-
-                int index = y * 512 + x;
-                ushort depth = depthData[index];
-
-                if (depth == 0) return;
-
-                DepthSpacePoint depthPoint = new DepthSpacePoint { X = x, Y = y };
-                CameraSpacePoint cameraPoint = coordinateMapper.MapDepthPointToCameraSpace(depthPoint, depth);
-
-                if (selectedPoint1 == null)
-                {
-                    selectedPoint1 = cameraPoint;
-                    MessageBox.Show("First point selected.");
-                }
-                else if (selectedPoint2 == null)
-                {
-                    selectedPoint2 = cameraPoint;
-                    float dx = selectedPoint1.Value.X - selectedPoint2.Value.X;
-                    float dy = selectedPoint1.Value.Y - selectedPoint2.Value.Y;
-                    float dz = selectedPoint1.Value.Z - selectedPoint2.Value.Z;
-
-                    float distance = (float)Math.Sqrt(dx * dx + dy * dy + dz * dz) * 1000; // in mm
-                    MessageBox.Show($"Distance: {distance:F2} mm");
-
-                    selectedPoint1 = null;
-                    selectedPoint2 = null;
-                }
-            }
-        }
         private void DepthPictureBox_MouseClick(object sender, MouseEventArgs e)
         {
             if (depthBitmap == null || coordinateMapper == null || depthReader == null)
@@ -636,13 +588,13 @@ namespace KinectProject
 
             List<System.Drawing.PointF> rawPoints = new List<System.Drawing.PointF>();
             float maxZ = float.MinValue;
-             maxZIndex = -1;
+            maxZIndex = -1;
 
             // Sample multiple center columns and apply median filter
             for (int y = 0; y < height; y += 1)
             {
                 List<float> zSamples = new List<float>();
-                for (int dx = -2; dx <= 2; dx++) // 5 pixels around center
+                for (int dx = -2; dx <= 2; dx++)
                 {
                     int x = centerX + dx;
                     if (x < 0 || x >= width) continue;
@@ -674,18 +626,12 @@ namespace KinectProject
             if (rawPoints.Count < 5)
             {
                 sideBox.Image = sideView;
-               
-
-
                 return;
             }
 
-            // Cubic spline interpolation
-       
             var filtered = FilterDepthPoints(rawPoints);
             List<System.Drawing.PointF> smoothedPoints = InterpolateSpinePoints(filtered);
 
-            // Draw everything
             using (Graphics g = Graphics.FromImage(sideView))
             {
                 g.Clear(Color.Black);
@@ -703,10 +649,7 @@ namespace KinectProject
                     }
                 }
 
-           
-
-                // Draw vertical line at deepest point
-                // MOVE this AFTER spline smoothing
+                // Trouver le point le plus profond après interpolation
                 float deepestZ = float.MinValue;
                 float deepestX = 0;
 
@@ -716,59 +659,24 @@ namespace KinectProject
                     {
                         deepestZ = smoothedPoints[i].X;
                         deepestX = smoothedPoints[i].X;
+                        maxZIndex = i; // mets à jour maxZIndex basé sur smoothedPoints
                     }
                 }
 
                 float refX = 50 + deepestX * 0.1f;
+                fixedDeepestXPixel = refX; // 🟢 stocké pour le MouseMove
+
                 using (Pen redPen = new Pen(Color.Red, 2) { DashStyle = System.Drawing.Drawing2D.DashStyle.Dash })
                 {
                     g.DrawLine(redPen, refX, 0, refX, sideView.Height);
                 }
 
-                // Label
                 g.DrawString($"Deepest Z: {deepestZ:F0} mm", new Font("Arial", 9), Brushes.White, refX + 5, 10);
-
             }
-            lastSmoothedSpinePoints = smoothedPoints;
 
+            lastSmoothedSpinePoints = smoothedPoints;
             sideBox.Image = sideView;
         }
-
-        private List<System.Drawing.PointF> SplineInterpolate(List<System.Drawing.PointF> points)
-        {
-            var result = new List<System.Drawing.PointF>();
-
-            for (int i = 1; i < points.Count - 2; i++)
-            {
-                System.Drawing.PointF p0 = points[i - 1];
-                System.Drawing.PointF p1 = points[i];
-                System.Drawing.PointF p2 = points[i + 1];
-                System.Drawing.PointF p3 = points[i + 2];
-
-                for (float t = 0; t <= 1; t += 0.2f)
-                {
-                    float t2 = t * t;
-                    float t3 = t2 * t;
-
-                    float x =
-                        0.5f * ((2 * p1.X) +
-                        (-p0.X + p2.X) * t +
-                        (2 * p0.X - 5 * p1.X + 4 * p2.X - p3.X) * t2 +
-                        (-p0.X + 3 * p1.X - 3 * p2.X + p3.X) * t3);
-
-                    float y =
-                        0.5f * ((2 * p1.Y) +
-                        (-p0.Y + p2.Y) * t +
-                        (2 * p0.Y - 5 * p1.Y + 4 * p2.Y - p3.Y) * t2 +
-                        (-p0.Y + 3 * p1.Y - 3 * p2.Y + p3.Y) * t3);
-
-                    result.Add(new System.Drawing.PointF(x, y));
-                }
-            }
-
-            return result;
-        }
-
 
         private List<System.Drawing.PointF> InterpolateSpinePoints(List<System.Drawing.PointF> points)
         {
@@ -867,7 +775,7 @@ namespace KinectProject
             {
                 g.Clear(Color.Black);
 
-                // 1. Redessiner la courbe
+                // 🔁 1. Redessiner la courbe depuis lastSmoothedSpinePoints
                 using (Pen pen = new Pen(Color.Cyan, 3))
                 {
                     for (int i = 1; i < lastSmoothedSpinePoints.Count; i++)
@@ -880,16 +788,19 @@ namespace KinectProject
                     }
                 }
 
-                // 2. Dessiner la ligne verticale rouge
-                float refX = 50 + lastSmoothedSpinePoints[maxZIndex].X * 0.1f;
-                using (Pen redPen = new Pen(Color.Red, 2) { DashStyle = System.Drawing.Drawing2D.DashStyle.Dash })
+                // 🔁 2. Ligne rouge fixe (Z le plus profond)
+                if (fixedDeepestXPixel > 0)
                 {
-                    g.DrawLine(redPen, refX, 0, refX, sideView.Height);
+                    using (Pen redPen = new Pen(Color.Red, 2) { DashStyle = System.Drawing.Drawing2D.DashStyle.Dash })
+                    {
+                        g.DrawLine(redPen, fixedDeepestXPixel, 0, fixedDeepestXPixel, sideView.Height);
+                    }
+
+                    float zRef = lastSmoothedSpinePoints[maxZIndex].X;
+                    g.DrawString($"Deepest Z: {zRef:F0} mm", new Font("Arial", 9), Brushes.White, fixedDeepestXPixel + 5, 10);
                 }
 
-                g.DrawString($"Deepest Z: {lastSmoothedSpinePoints[maxZIndex].X:F0} mm", new Font("Arial", 9), Brushes.White, refX + 5, 10);
-
-                // 3. Trouver le point le plus proche du curseur
+                // 🔁 3. Affichage de la distance si curseur proche
                 float minDistance = 10f;
                 System.Drawing.PointF? closestPoint = null;
 
@@ -909,18 +820,16 @@ namespace KinectProject
                     }
                 }
 
-                // 4. Si trouvé : afficher Z + décalage
                 if (closestPoint != null)
                 {
-                    float zPoint = closestPoint.Value.X; // profondeur du point (en mm)
-                    float zRef = lastSmoothedSpinePoints[maxZIndex].X; // profondeur verticale rouge
-                    float lateralDistance = Math.Abs(zPoint - zRef); // différence en mm
+                    float zPoint = closestPoint.Value.X;
+                    float zRef = lastSmoothedSpinePoints[maxZIndex].X;
+                    float lateralDistance = Math.Abs(zPoint - zRef);
 
                     float x = 50 + closestPoint.Value.X * 0.1f;
                     float y = closestPoint.Value.Y;
 
                     string label = $"Z: {zPoint:F1} mm\nDécalage: {lateralDistance:F1} mm";
-
                     g.DrawString(label, new Font("Arial", 9), Brushes.Yellow, x + 5, y - 25);
                     g.FillEllipse(Brushes.Yellow, x - 3, y - 3, 6, 6);
                 }
@@ -931,21 +840,6 @@ namespace KinectProject
         }
 
 
-        private void DrawVerticalLine(Graphics g, float xPosition, float height, Color color, string label = null)
-        {
-            using (Pen redPen = new Pen(color, 2) { DashStyle = System.Drawing.Drawing2D.DashStyle.Dash })
-            {
-                g.DrawLine(redPen, xPosition, 0, xPosition, height);
-            }
-
-            if (!string.IsNullOrEmpty(label))
-            {
-                using (Font font = new Font("Arial", 9))
-                {
-                    g.DrawString(label, font, Brushes.White, xPosition + 5, 10);
-                }
-            }
-        }
 
         private List<System.Drawing.PointF> FilterDepthPoints(List<System.Drawing.PointF> points)
         {
@@ -958,6 +852,24 @@ namespace KinectProject
             }
             return filtered;
         }
+
+
+        private void DrawFixedDeepestLine(Graphics g, List<System.Drawing.PointF> spinePoints, int maxZIdx)
+        {
+            if (spinePoints == null || spinePoints.Count == 0 || maxZIdx < 0 || maxZIdx >= spinePoints.Count)
+                return;
+
+            float xZ = spinePoints[maxZIdx].X;
+            float xPixel = 50 + xZ * 0.1f;
+
+            using (Pen redPen = new Pen(Color.Red, 2) { DashStyle = System.Drawing.Drawing2D.DashStyle.Dash })
+            {
+                g.DrawLine(redPen, xPixel, 0, xPixel, sideBox.Height);
+            }
+
+            g.DrawString($"Deepest Z: {xZ:F0} mm", new Font("Arial", 9), Brushes.White, xPixel + 5, 10);
+        }
+
 
 
     }
