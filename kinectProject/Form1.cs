@@ -1,6 +1,6 @@
 ﻿using System;
 using System.Drawing;
-using System.Drawing.Imaging;
+
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -9,7 +9,7 @@ using Microsoft.VisualBasic;
 using System.IO;
 using System.Linq;
 using System.Collections.Generic;
-
+using System.Drawing.Imaging;  // for ImageFormat
 
 
 namespace KinectProject
@@ -40,6 +40,7 @@ namespace KinectProject
 
         private PictureBox depthPictureBox; // Make this global if it's not already
         private PictureBox sideBox;
+        private PictureBox infoBox;
 
         private List<System.Drawing.PointF> lastSmoothedPoints = new List<System.Drawing.PointF>();
 
@@ -67,117 +68,203 @@ namespace KinectProject
         {
             try
             {
+                // === Initialize Kinect ===
                 kinectSensor = KinectSensor.GetDefault();
                 if (kinectSensor == null)
                 {
-                    MessageBox.Show("No Kinect sensor detected.");
+                    MessageBox.Show("Aucun capteur Kinect détecté.", "Erreur Kinect", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    Application.Exit();
                     return;
                 }
-
                 kinectSensor.Open();
-
                 coordinateMapper = kinectSensor.CoordinateMapper;
-                depthReader = kinectSensor.DepthFrameSource.OpenReader();
 
-                multiSourceFrameReader = kinectSensor.OpenMultiSourceFrameReader(FrameSourceTypes.Depth | FrameSourceTypes.Body | FrameSourceTypes.Color);
+                multiSourceFrameReader = kinectSensor.OpenMultiSourceFrameReader(FrameSourceTypes.Depth | FrameSourceTypes.Body);
                 multiSourceFrameReader.MultiSourceFrameArrived += MultiSourceFrameReader_MultiSourceFrameArrived;
 
                 depthBitmap = new Bitmap(512, 424, PixelFormat.Format32bppRgb);
                 depthPixels = new byte[512 * 424 * 4];
-// === ÉTAPE 2 : Créer le PictureBox et l'ajouter après ===
+
+                // === Main depth view PictureBox ===
                 depthPictureBox = new PictureBox
                 {
-                    Width = 500,
-                    Height = 424,
-                    Dock = DockStyle.Left,
-                    SizeMode = PictureBoxSizeMode.StretchImage,
-                    BackColor = Color.Black
+                    Dock = DockStyle.Fill,
+                    BackColor = Color.FromArgb(30, 30, 30),
+                    BorderStyle = BorderStyle.FixedSingle,
+                    SizeMode = PictureBoxSizeMode.Zoom
                 };
-                this.Controls.Add(depthPictureBox); // Ajouté après le panel
+                this.Controls.Add(depthPictureBox);
                 depthPictureBox.MouseClick += DepthPictureBox_MouseClick;
-                ///////////////////////:
-                ///
-                // === PictureBox secondaire pour la courbe sagittale ===
-                 sideBox = new PictureBox
+
+                // === Right Panel (sideBox + infoBox) ===
+                Panel rightPanel = new Panel
                 {
-                    Width = 350,
-                    Height = 424,
                     Dock = DockStyle.Right,
+                    Width = 370,
                     BackColor = Color.Black
                 };
-                this.Controls.Add(sideBox);
+                this.Controls.Add(rightPanel);
 
-                // 👉 Ajouter le suivi de la souris ici
+                // Container panel to manage layout
+                Panel sideContainer = new Panel
+                {
+                    Dock = DockStyle.Fill,
+                    BackColor = Color.Black
+                };
+                rightPanel.Controls.Add(sideContainer);
+
+                sideBox = new PictureBox
+                {
+                    Dock = DockStyle.Fill,
+                    BackColor = Color.FromArgb(30, 30, 30),
+                    BorderStyle = BorderStyle.FixedSingle
+                };
+                sideContainer.Controls.Add(sideBox);
                 sideBox.MouseMove += SideBox_MouseMove;
 
+                infoBox = new PictureBox
+                {
+                    Height = 100,
+                    Dock = DockStyle.Bottom,
+                    BackColor = Color.DarkRed,
+                    Visible = true
+                };
+                sideContainer.Controls.Add(infoBox);
 
-                ////////////////////////
-                // === ÉTAPE 1 : Créer le Panel pour les boutons et UI ===
+                // === Top panel with controls ===
                 Panel topPanel = new Panel
                 {
                     Dock = DockStyle.Top,
-                    Height = 60,
-                    BackColor = Color.DarkGray
+                    Height = 80,
+                    BackColor = Color.FromArgb(64, 64, 64),
+                    Padding = new Padding(10)
                 };
-                this.Controls.Add(topPanel); // Ajouté en premier !
+                this.Controls.Add(topPanel);
 
-                
+                TableLayoutPanel controlLayout = new TableLayoutPanel
+                {
+                    Dock = DockStyle.Fill,
+                    ColumnCount = 7,
+                    RowCount = 1,
+                    BackColor = Color.Transparent
+                };
+                controlLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 150));
+                controlLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 150));
+                controlLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 150));
+                controlLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 150));
+                controlLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 170));
+                controlLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 170));
+                controlLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 120));
+                topPanel.Controls.Add(controlLayout);
 
-                // === ÉTAPE 3 : Bouton Capture Vue 3D ===
-                Button captureBtn = new Button();
-                captureBtn.Text = "Capturer Vue 3D";
-                captureBtn.Location = new Point(10, 15);
-                captureBtn.Size = new Size(140, 30);
-                captureBtn.BackColor = Color.LightGreen;
-
+                Button captureBtn = new Button
+                {
+                    Text = "Capturer Vue 3D",
+                    Dock = DockStyle.Fill,
+                    BackColor = Color.FromArgb(76, 175, 80),
+                    ForeColor = Color.White,
+                    FlatStyle = FlatStyle.Flat
+                };
+                captureBtn.FlatAppearance.BorderSize = 0;
                 captureBtn.Click += (s, args) =>
                 {
                     string label = Microsoft.VisualBasic.Interaction.InputBox("Nom de la vue (ex: face, gauche...)", "Nom vue", "face");
                     if (string.IsNullOrWhiteSpace(label)) return;
-
                     string fileName = $"capture_{label}_{DateTime.Now:HHmmss}.ply";
                     CapturePointCloud(fileName);
                 };
-                topPanel.Controls.Add(captureBtn);
-                ///////////////////////
+                controlLayout.Controls.Add(captureBtn, 0, 0);
 
-                Button sagittalBtn = new Button();
-                sagittalBtn.Text = "Capturer Courbe Sagittale";
-                sagittalBtn.Location = new Point(620, 15);
-                sagittalBtn.Size = new Size(180, 30);
-                sagittalBtn.BackColor = Color.LightBlue;
-                sagittalBtn.Click += SagittalBtn_Click;
-                topPanel.Controls.Add(sagittalBtn);
-
-
-                //////////////////////
-                // === ÉTAPE 4 : ComboBox pour les joints ===
+                jointSelector1.DropDownStyle = ComboBoxStyle.DropDownList;
                 jointSelector1.Items.AddRange(Enum.GetNames(typeof(JointType)));
-                jointSelector2.Items.AddRange(Enum.GetNames(typeof(JointType)));
-
                 jointSelector1.SelectedIndex = 0;
+                jointSelector1.Dock = DockStyle.Fill;
+                jointSelector1.BackColor = Color.FromArgb(50, 50, 50);
+                jointSelector1.ForeColor = Color.White;
+                jointSelector1.FlatStyle = FlatStyle.Flat;
+                controlLayout.Controls.Add(jointSelector1, 1, 0);
+
+                jointSelector2.DropDownStyle = ComboBoxStyle.DropDownList;
+                jointSelector2.Items.AddRange(Enum.GetNames(typeof(JointType)));
                 jointSelector2.SelectedIndex = 1;
+                jointSelector2.Dock = DockStyle.Fill;
+                jointSelector2.BackColor = Color.FromArgb(50, 50, 50);
+                jointSelector2.ForeColor = Color.White;
+                jointSelector2.FlatStyle = FlatStyle.Flat;
+                controlLayout.Controls.Add(jointSelector2, 2, 0);
 
-                jointSelector1.Location = new Point(160, 15);
-                jointSelector2.Location = new Point(310, 15);
-
-                topPanel.Controls.Add(jointSelector1);
-                topPanel.Controls.Add(jointSelector2);
-
-                // === ÉTAPE 5 : Label pour la différence de profondeur ===
-                depthDiffLabel.Location = new Point(470, 20);
                 depthDiffLabel.Text = "Depth Difference: - mm";
-                depthDiffLabel.AutoSize = true;
-                topPanel.Controls.Add(depthDiffLabel);
+                depthDiffLabel.Dock = DockStyle.Fill;
+                depthDiffLabel.ForeColor = Color.White;
+                depthDiffLabel.TextAlign = ContentAlignment.MiddleLeft;
+                controlLayout.Controls.Add(depthDiffLabel, 3, 0);
 
-                // === Message d'information ===
-                MessageBox.Show("Veuillez vous placer à 1-2 mètres du capteur pour une détection optimale.");
+                Button sagittalBtn = new Button
+                {
+                    Text = "Capturer Courbe Sagittale",
+                    Dock = DockStyle.Fill,
+                    BackColor = Color.FromArgb(33, 150, 243),
+                    ForeColor = Color.White,
+                    FlatStyle = FlatStyle.Flat
+                };
+                sagittalBtn.FlatAppearance.BorderSize = 0;
+                sagittalBtn.Click += SagittalBtn_Click;
+                controlLayout.Controls.Add(sagittalBtn, 4, 0);
+
+                Button exportBtn = new Button
+                {
+                    Text = "Exporter Courbe PNG",
+                    Dock = DockStyle.Fill,
+                    BackColor = Color.FromArgb(255, 193, 7),
+                    ForeColor = Color.Black,
+                    FlatStyle = FlatStyle.Flat
+                };
+                exportBtn.FlatAppearance.BorderSize = 0;
+                exportBtn.Click += ExportCurveBtn_Click;
+                controlLayout.Controls.Add(exportBtn, 5, 0);
+
+                Button toggleInfoBtn = new Button
+                {
+                    Text = "Afficher/Masquer Info",
+                    Dock = DockStyle.Fill,
+                    BackColor = Color.Gray,
+                    ForeColor = Color.White,
+                    FlatStyle = FlatStyle.Flat
+                };
+                toggleInfoBtn.Click += (s, args) =>
+                {
+                    infoBox.Visible = !infoBox.Visible;
+                    infoBox.Parent.PerformLayout(); // trigger layout
+                    sideBox.Refresh();
+                };
+                controlLayout.Controls.Add(toggleInfoBtn, 6, 0);
+
+                StatusStrip statusStrip = new StatusStrip
+                {
+                    Dock = DockStyle.Bottom,
+                    BackColor = Color.FromArgb(64, 64, 64),
+                    ForeColor = Color.White
+                };
+                ToolStripStatusLabel statusLabel = new ToolStripStatusLabel
+                {
+                    Text = "Veuillez vous placer à 1-2 mètres du capteur pour une détection optimale.",
+                    ForeColor = Color.White
+                };
+                statusStrip.Items.Add(statusLabel);
+                this.Controls.Add(statusStrip);
+
+                this.BackColor = Color.FromArgb(45, 45, 45);
+                this.Text = "Kinect Body Analysis Pro";
+                this.Font = new Font("Segoe UI", 9f, FontStyle.Regular);
+                this.AutoScaleMode = AutoScaleMode.Dpi;
+                this.DoubleBuffered = true;
             }
             catch (Exception ex)
             {
-                MessageBox.Show("Error: " + ex.Message);
+                MessageBox.Show("Error: " + ex.Message, "Initialization Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
+
 
         private void MultiSourceFrameReader_MultiSourceFrameArrived(object sender, MultiSourceFrameArrivedEventArgs e)
         {
@@ -630,11 +717,15 @@ namespace KinectProject
             }
 
             var filtered = FilterDepthPoints(rawPoints);
-            List<System.Drawing.PointF> smoothedPoints = InterpolateSpinePoints(filtered);
+            var gaussianed = GaussianSmooth(filtered, 5, 2.0);
+            List<System.Drawing.PointF> smoothedPoints = InterpolateSpinePoints(gaussianed);
 
             using (Graphics g = Graphics.FromImage(sideView))
             {
                 g.Clear(Color.Black);
+
+                g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+
 
                 using (Pen spinePen = new Pen(Color.Cyan, 3))
                 {
@@ -672,10 +763,20 @@ namespace KinectProject
                 }
 
                 g.DrawString($"Deepest Z: {deepestZ:F0} mm", new Font("Arial", 9), Brushes.White, refX + 5, 10);
+
+                float cobbAngle = CalculateCobbAngle(smoothedPoints);
+                string interpretation = InterpretCobbAngle(cobbAngle);
+                ShowCobbInfo(cobbAngle, interpretation);
+
+
+
             }
+
 
             lastSmoothedSpinePoints = smoothedPoints;
             sideBox.Image = sideView;
+
+
         }
 
         private List<System.Drawing.PointF> InterpolateSpinePoints(List<System.Drawing.PointF> points)
@@ -775,6 +876,8 @@ namespace KinectProject
             {
                 g.Clear(Color.Black);
 
+                g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+
                 // 🔁 1. Redessiner la courbe depuis lastSmoothedSpinePoints
                 using (Pen pen = new Pen(Color.Cyan, 3))
                 {
@@ -871,6 +974,190 @@ namespace KinectProject
         }
 
 
+        //13/07
+        List<System.Drawing.PointF> GaussianSmooth(List<System.Drawing.PointF> raw, int radius = 3, double sigma = 1.0)
+        {
+            int len = raw.Count;
+            var smoothed = new List<System.Drawing.PointF>(len);
+
+            // Build Gaussian kernel
+            var kernel = new double[2 * radius + 1];
+            double sum = 0;
+            for (int i = -radius; i <= radius; i++)
+            {
+                double v = Math.Exp(-0.5 * (i * i) / (sigma * sigma));
+                kernel[i + radius] = v;
+                sum += v;
+            }
+            for (int i = 0; i < kernel.Length; i++)
+                kernel[i] /= sum;
+
+            // Convolve
+            for (int i = 0; i < len; i++)
+            {
+                double accum = 0;
+                double weight = 0;
+                for (int k = -radius; k <= radius; k++)
+                {
+                    int idx = i + k;
+                    if (idx < 0 || idx >= len) continue;
+                    accum += raw[idx].X * kernel[k + radius];
+                    weight += kernel[k + radius];
+                }
+                // Keep original Y
+                smoothed.Add(new System.Drawing.PointF((float)(accum / weight), raw[i].Y));
+            }
+            return smoothed;
+        }
+
+
+        /////////////::
+        private void ExportCurveBtn_Click(object sender, EventArgs e)
+        {
+            using (var sfd = new SaveFileDialog())
+            {
+                sfd.Filter = "PNG Image|*.png";
+                sfd.Title = "Enregistrer Courbe Sagittale";
+                sfd.FileName = $"SpineCurve_{DateTime.Now:yyyyMMdd_HHmmss}.png";
+
+                if (sfd.ShowDialog() == DialogResult.OK)
+                {
+                    ExportSpineCurveHighRes(sfd.FileName, 1920, 1080);
+                    MessageBox.Show($"Courbe enregistrée : {sfd.FileName}",
+                                    "Succès", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+            }
+        }
+
+        ////////////////////
+        ///
+
+        private void ExportSpineCurveHighRes(string filePath, int targetWidth, int targetHeight)
+        {
+            if (lastSmoothedSpinePoints == null || lastSmoothedSpinePoints.Count < 2)
+                return;
+
+            using (var bmp = new Bitmap(targetWidth, targetHeight))
+            using (Graphics g = Graphics.FromImage(bmp))
+            {
+                g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                g.Clear(Color.Black);
+
+                // Match UI values exactly
+                float offsetX = 50f;
+                float scaleX = 0.1f;
+                float scaleY = targetHeight / 424f;
+
+                // 1. Draw curve
+                using (Pen spinePen = new Pen(Color.Cyan, 4))
+                {
+                    for (int i = 1; i < lastSmoothedSpinePoints.Count; i++)
+                    {
+                        var p1 = lastSmoothedSpinePoints[i - 1];
+                        var p2 = lastSmoothedSpinePoints[i];
+
+                        float x1 = offsetX + p1.X * scaleX;
+                        float y1 = p1.Y * scaleY;
+                        float x2 = offsetX + p2.X * scaleX;
+                        float y2 = p2.Y * scaleY;
+
+                        g.DrawLine(spinePen, x1, y1, x2, y2);
+                    }
+                }
+
+                // 2. Vertical red line aligned with deepest point
+                if (maxZIndex >= 0 && maxZIndex < lastSmoothedSpinePoints.Count)
+                {
+                    float deepestZ = lastSmoothedSpinePoints[maxZIndex].X;
+                    float xDeep = offsetX + deepestZ * scaleX;
+
+                    using (Pen redDash = new Pen(Color.Red, 3) { DashStyle = System.Drawing.Drawing2D.DashStyle.Dash })
+                    {
+                        g.DrawLine(redDash, xDeep, 0, xDeep, targetHeight);
+                    }
+
+                    using (Font font = new Font("Segoe UI", 20, FontStyle.Bold))
+                    {
+                        g.DrawString($"Profondeur max : {deepestZ:F0} mm", font, Brushes.White, xDeep + 10, 20);
+                    }
+                }
+
+                bmp.Save(filePath, ImageFormat.Png);
+            }
+        }
+
+
+        private float CalculateCobbAngle(List<System.Drawing.PointF> spinePoints)
+        {
+            if (spinePoints == null || spinePoints.Count < 10) return 0;
+
+            // On prend le haut et le bas de la courbe (par ex. 10%)
+            int offset = spinePoints.Count / 10;
+            System.Drawing.PointF top = spinePoints[offset];
+            System.Drawing.PointF bottom = spinePoints[spinePoints.Count - 1 - offset];
+
+            // Vecteurs par rapport à l’axe vertical
+            var vec1 = new System.Drawing.PointF(0, 1); // axe vertical
+            var vec2 = new System.Drawing.PointF(bottom.X - top.X, bottom.Y - top.Y);
+
+            // Produit scalaire et angle
+            float dot = vec1.X * vec2.X + vec1.Y * vec2.Y;
+            float mag1 = (float)Math.Sqrt(vec1.X * vec1.X + vec1.Y * vec1.Y);
+            float mag2 = (float)Math.Sqrt(vec2.X * vec2.X + vec2.Y * vec2.Y);
+
+            float angleRad = (float)Math.Acos(dot / (mag1 * mag2));
+            float angleDeg = angleRad * 180f / (float)Math.PI;
+
+            return angleDeg;
+        }
+
+
+        private void DrawCobbAngle(Graphics g, float angleDeg, int imageWidth)
+        {
+            using (Font font = new Font("Segoe UI", 16, FontStyle.Bold))
+            using (Brush brush = Brushes.Yellow)
+            {
+                string label = $"Angle Cobb ≈ {angleDeg:F1}°";
+                g.DrawString(label, font, brush, imageWidth - 300, 30);
+            }
+        }
+
+
+        private string InterpretCobbAngle(float angleDeg)
+        {
+            if (angleDeg < 10) return "Pas de scoliose détectée.";
+            else if (angleDeg < 20) return "Scoliose légère.";
+            else if (angleDeg < 40) return "Scoliose modérée.";
+            else return "Scoliose sévère. Suivi médical recommandé.";
+        }
+
+
+        private void ShowCobbInfo(float angle, string interpretation)
+        {
+            if (infoBox == null) return;
+
+            // ✅ Évite les erreurs dues à taille invalide
+            int w = infoBox.Width;
+            int h = infoBox.Height;
+            if (w <= 0 || h <= 0) return;
+
+            Bitmap bmp = new Bitmap(w, h);
+            using (Graphics g = Graphics.FromImage(bmp))
+            {
+                g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                g.Clear(Color.FromArgb(30, 30, 30));
+
+                using (Font font = new Font("Segoe UI", 12, FontStyle.Bold))
+                using (Font fontSmall = new Font("Segoe UI", 10))
+                {
+                    g.DrawString($"Angle de Cobb : {angle:F1}°", font, Brushes.LightGreen, 10, 10);
+                    g.DrawString($"Analyse : {interpretation}", fontSmall, Brushes.White, 10, 40);
+                }
+            }
+
+            infoBox.Image?.Dispose(); // ✅ Nettoyage ancien bitmap
+            infoBox.Image = bmp;
+        }
 
     }
 
