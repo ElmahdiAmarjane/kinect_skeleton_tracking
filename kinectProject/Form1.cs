@@ -76,7 +76,10 @@ namespace KinectProject
                     Application.Exit();
                     return;
                 }
+
                 kinectSensor.Open();
+                kinectSensor.IsAvailableChanged -= KinectSensor_IsAvailableChanged;
+                kinectSensor.IsAvailableChanged += KinectSensor_IsAvailableChanged;
                 coordinateMapper = kinectSensor.CoordinateMapper;
 
                 multiSourceFrameReader = kinectSensor.OpenMultiSourceFrameReader(FrameSourceTypes.Depth | FrameSourceTypes.Body);
@@ -135,7 +138,7 @@ namespace KinectProject
                 Panel topPanel = new Panel
                 {
                     Dock = DockStyle.Top,
-                    Height = 80,
+                    Height = 60,
                     BackColor = Color.FromArgb(64, 64, 64),
                     Padding = new Padding(10)
                 };
@@ -148,22 +151,25 @@ namespace KinectProject
                     RowCount = 1,
                     BackColor = Color.Transparent
                 };
+                controlLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
                 controlLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 150));
                 controlLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 150));
                 controlLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 150));
                 controlLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 150));
                 controlLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 170));
                 controlLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 170));
-                controlLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 120));
+                controlLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 140));
                 topPanel.Controls.Add(controlLayout);
 
                 Button captureBtn = new Button
                 {
                     Text = "Capturer Vue 3D",
                     Dock = DockStyle.Fill,
+                    Height = 36,
                     BackColor = Color.FromArgb(76, 175, 80),
                     ForeColor = Color.White,
-                    FlatStyle = FlatStyle.Flat
+                    FlatStyle = FlatStyle.Flat,
+                    Margin = new Padding(2)
                 };
                 captureBtn.FlatAppearance.BorderSize = 0;
                 captureBtn.Click += (s, args) =>
@@ -203,9 +209,11 @@ namespace KinectProject
                 {
                     Text = "Capturer Courbe Sagittale",
                     Dock = DockStyle.Fill,
+                    Height = 36,
                     BackColor = Color.FromArgb(33, 150, 243),
                     ForeColor = Color.White,
-                    FlatStyle = FlatStyle.Flat
+                    FlatStyle = FlatStyle.Flat,
+                    Margin = new Padding(2)
                 };
                 sagittalBtn.FlatAppearance.BorderSize = 0;
                 sagittalBtn.Click += SagittalBtn_Click;
@@ -215,9 +223,11 @@ namespace KinectProject
                 {
                     Text = "Exporter Courbe PNG",
                     Dock = DockStyle.Fill,
+                    Height = 36,
                     BackColor = Color.FromArgb(255, 193, 7),
                     ForeColor = Color.Black,
-                    FlatStyle = FlatStyle.Flat
+                    FlatStyle = FlatStyle.Flat,
+                    Margin = new Padding(2)
                 };
                 exportBtn.FlatAppearance.BorderSize = 0;
                 exportBtn.Click += ExportCurveBtn_Click;
@@ -227,14 +237,16 @@ namespace KinectProject
                 {
                     Text = "Afficher/Masquer Info",
                     Dock = DockStyle.Fill,
+                    Height = 36,
                     BackColor = Color.Gray,
                     ForeColor = Color.White,
-                    FlatStyle = FlatStyle.Flat
+                    FlatStyle = FlatStyle.Flat,
+                    Margin = new Padding(2)
                 };
                 toggleInfoBtn.Click += (s, args) =>
                 {
                     infoBox.Visible = !infoBox.Visible;
-                    infoBox.Parent.PerformLayout(); // trigger layout
+                    infoBox.Parent.PerformLayout();
                     sideBox.Refresh();
                 };
                 controlLayout.Controls.Add(toggleInfoBtn, 6, 0);
@@ -263,6 +275,19 @@ namespace KinectProject
             {
                 MessageBox.Show("Error: " + ex.Message, "Initialization Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
+        }
+
+    
+
+        private void KinectSensor_IsAvailableChanged(object sender, IsAvailableChangedEventArgs e)
+        {
+            this.BeginInvoke((MethodInvoker)(() =>
+            {
+                if (!e.IsAvailable)
+                {
+                    MessageBox.Show("Connexion perdue avec le capteur Kinect.", "Alerte", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
+            }));
         }
 
 
