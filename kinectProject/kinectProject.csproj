@@ -50,6 +50,7 @@
     <Reference Include="System.Windows.Forms" />
     <Reference Include="System.Xml" />
 	<Reference Include="Microsoft.VisualBasic" />
+	  <Reference Include="System.Numerics" />
   </ItemGroup>
   <ItemGroup>
     <Compile Include="Form1.cs">

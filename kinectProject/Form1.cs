@@ -10,7 +10,7 @@ using System.IO;
 using System.Linq;
 using System.Collections.Generic;
 using System.Drawing.Imaging;  // for ImageFormat
-
+using System.Numerics; // pour Vector3
 
 namespace KinectProject
 {
@@ -41,6 +41,7 @@ namespace KinectProject
         private PictureBox depthPictureBox; // Make this global if it's not already
         private PictureBox sideBox;
         private PictureBox infoBox;
+        private PictureBox angleSpineBox;
 
         private List<System.Drawing.PointF> lastSmoothedPoints = new List<System.Drawing.PointF>();
 
@@ -50,7 +51,8 @@ namespace KinectProject
         private int maxZIndex = -1;
 
         private float fixedDeepestXPixel = -1;  // ← position en pixels sur le sideBox (avec échelle)
-
+        //
+        private double spineAngle; 
 
         ///////////////
         /// <summary>
@@ -129,11 +131,19 @@ namespace KinectProject
                 {
                     Height = 100,
                     Dock = DockStyle.Bottom,
-                    BackColor = Color.DarkRed,
+                    BackColor = Color.Transparent,
                     Visible = true
                 };
                 sideContainer.Controls.Add(infoBox);
 
+                angleSpineBox = new PictureBox
+                {
+                    Height = 50,
+                    Dock = DockStyle.Bottom,
+                    BackColor = Color.Transparent,
+                    Visible = true
+                };
+                infoBox.Controls.Add(angleSpineBox);
                 // === Top panel with controls ===
                 Panel topPanel = new Panel
                 {
@@ -429,6 +439,11 @@ namespace KinectProject
 
                 UpdateBitmap(width, height);
                 DrawSpineOnBitmap(trackedBody);
+                //
+                spineAngle = CalculateSpineAngle(trackedBody);
+                DrawSpineAngleInInfoBox(spineAngle);
+
+                //
                 depthPictureBox.Invalidate();
             }
             catch (Exception ex)
@@ -1137,15 +1152,18 @@ namespace KinectProject
         }
 
 
-        private void DrawCobbAngle(Graphics g, float angleDeg, int imageWidth)
-        {
-            using (Font font = new Font("Segoe UI", 16, FontStyle.Bold))
-            using (Brush brush = Brushes.Yellow)
-            {
-                string label = $"Angle Cobb ≈ {angleDeg:F1}°";
-                g.DrawString(label, font, brush, imageWidth - 300, 30);
-            }
-        }
+        //private void DrawCobbAngle(Graphics g, float angleDeg, int imageWidth)
+        //{
+        //    using (Font font = new Font("Segoe UI", 16, FontStyle.Bold))
+        //    using (Brush brush = Brushes.Yellow)
+        //    {
+        //        string label = $"Angle Cobbbbb ≈ {angleDeg:F1}°";
+        //        g.DrawString(label, font, brush, imageWidth - 300, 30);
+
+        //        string labelspineAngle = $"Angle sagittal du tronc: ≈ {spineAngle:F2}°";
+        //        g.DrawString(labelspineAngle, font, brush, imageWidth - 300, 30);
+        //    }
+        //}
 
 
         private string InterpretCobbAngle(float angleDeg)
@@ -1175,13 +1193,70 @@ namespace KinectProject
                 using (Font font = new Font("Segoe UI", 12, FontStyle.Bold))
                 using (Font fontSmall = new Font("Segoe UI", 10))
                 {
-                    g.DrawString($"Angle de Cobb : {angle:F1}°", font, Brushes.LightGreen, 10, 10);
+                    g.DrawString($"Angle de Cobbbbbb : {angle:F1}°", font, Brushes.LightGreen, 10, 10);
                     g.DrawString($"Analyse : {interpretation}", fontSmall, Brushes.White, 10, 40);
                 }
             }
 
             infoBox.Image?.Dispose(); // ✅ Nettoyage ancien bitmap
             infoBox.Image = bmp;
+        }
+
+
+        private void DrawSpineAngleInInfoBox(double angle)
+        {
+            if (angleSpineBox == null) return;
+
+            Bitmap infoBitmap = new Bitmap(angleSpineBox.Width, angleSpineBox.Height);
+            using (Graphics g = Graphics.FromImage(infoBitmap))
+            {
+                g.Clear(Color.FromArgb(30, 30, 30)); // Fond sombre pour meilleure visibilité
+                g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAlias;
+                string angleText = $"Angle sagittal du tronc: {angle:F2}°";
+                using (Font font = new Font("Arial", 14, FontStyle.Bold))
+                {
+                    g.DrawString(angleText, font, Brushes.White, new System.Drawing.PointF(10, 10));
+                }
+            }
+            angleSpineBox.Image?.Dispose(); // Libérer ancienne image
+            angleSpineBox.Image = infoBitmap;
+            angleSpineBox.Invalidate(); // Forcer rafraîchissement
+        }
+
+        private double CalculateSpineAngle(Body body)
+        {
+            if (body == null || !body.IsTracked) return double.NaN;
+
+            Joint shoulder = body.Joints[JointType.ShoulderLeft];
+            Joint spineMid = body.Joints[JointType.SpineMid];
+            Joint spineBase = body.Joints[JointType.SpineBase];
+
+            if (shoulder.TrackingState == TrackingState.NotTracked ||
+                spineMid.TrackingState == TrackingState.NotTracked ||
+                spineBase.TrackingState == TrackingState.NotTracked)
+                return double.NaN;
+
+            // Vecteurs
+            Vector3 vector1 = new Vector3(
+                spineMid.Position.X - shoulder.Position.X,
+                spineMid.Position.Y - shoulder.Position.Y,
+                spineMid.Position.Z - shoulder.Position.Z
+            );
+
+            Vector3 vector2 = new Vector3(
+                spineBase.Position.X - spineMid.Position.X,
+                spineBase.Position.Y - spineMid.Position.Y,
+                spineBase.Position.Z - spineMid.Position.Z
+            );
+
+            // Produit scalaire + angle
+            float dot = Vector3.Dot(vector1, vector2);
+            float mag1 = vector1.Length();
+            float mag2 = vector2.Length();
+            double angleRadians = Math.Acos(dot / (mag1 * mag2));
+            double angleDegrees = angleRadians * (180.0 / Math.PI);
+
+            return Math.Round(angleDegrees, 1);
         }
 
     }
