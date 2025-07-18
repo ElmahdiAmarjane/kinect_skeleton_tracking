@@ -1,16 +1,20 @@
-﻿using System;
+﻿
+using Microsoft.Kinect;
+using PdfSharp.Drawing;
+using PdfSharp.Drawing.Layout;
+using PdfSharp.Pdf;
+using System;
+using System.Collections.Generic;
 using System.Drawing;
-
+using System.Drawing.Imaging;  // for ImageFormat
+using System.IO;
+using System.Linq;
+using System.Numerics; // pour Vector3
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using System.Windows.Forms;
-using Microsoft.Kinect;
-using Microsoft.VisualBasic;
-using System.IO;
-using System.Linq;
-using System.Collections.Generic;
-using System.Drawing.Imaging;  // for ImageFormat
-using System.Numerics; // pour Vector3
+
+
 
 namespace KinectProject
 {
@@ -61,11 +65,18 @@ namespace KinectProject
         ComboBox jointSelector1 = new ComboBox();
         ComboBox jointSelector2 = new ComboBox();
         Label depthDiffLabel = new Label();
+        /////////////////////
+        ///
+        private TextBox patientNameTextBox;
+        private TextBox patientAgeTextBox;
+        private Button generatePdfBtn;
 
         public Form1()
         {
+           
             InitializeComponent();
         }
+
         private void Form1_Load(object sender, EventArgs e)
         {
             try
@@ -157,7 +168,7 @@ namespace KinectProject
                 TableLayoutPanel controlLayout = new TableLayoutPanel
                 {
                     Dock = DockStyle.Fill,
-                    ColumnCount = 7,
+                    ColumnCount = 8,
                     RowCount = 1,
                     BackColor = Color.Transparent
                 };
@@ -245,7 +256,7 @@ namespace KinectProject
 
                 Button toggleInfoBtn = new Button
                 {
-                    Text = "Afficher/Masquer Info",
+                    Text = "Afficher Info",
                     Dock = DockStyle.Fill,
                     Height = 36,
                     BackColor = Color.Gray,
@@ -260,7 +271,31 @@ namespace KinectProject
                     sideBox.Refresh();
                 };
                 controlLayout.Controls.Add(toggleInfoBtn, 6, 0);
+                //////////////////
 
+                Button generatePdfButton = new Button
+                {
+                    Text = "Générer PDF",
+                    Dock = DockStyle.Fill,
+                    Height = 36,
+                    BackColor = Color.Gray,
+                    ForeColor = Color.White,
+                    FlatStyle = FlatStyle.Flat,
+                    Margin = new Padding(2)
+                };
+                generatePdfButton.Click += GeneratePdfButton_Click;
+
+                controlLayout.Controls.Add(generatePdfButton, 7, 0);
+
+
+
+
+
+
+
+
+
+                /////////////////
                 StatusStrip statusStrip = new StatusStrip
                 {
                     Dock = DockStyle.Bottom,
@@ -277,7 +312,7 @@ namespace KinectProject
 
                 this.BackColor = Color.FromArgb(45, 45, 45);
                 this.Text = "Kinect Body Analysis Pro";
-                this.Font = new Font("Segoe UI", 9f, FontStyle.Regular);
+                this.Font = new System.Drawing.Font("Segoe UI", 9f, FontStyle.Regular);
                 this.AutoScaleMode = AutoScaleMode.Dpi;
                 this.DoubleBuffered = true;
             }
@@ -463,7 +498,7 @@ namespace KinectProject
         private void UpdateBitmap(int width, int height)
         {
             BitmapData bitmapData = depthBitmap.LockBits(
-                new Rectangle(0, 0, width, height),
+                new System.Drawing.Rectangle(0, 0, width, height),
                 ImageLockMode.WriteOnly,
                 PixelFormat.Format32bppArgb);
 
@@ -802,7 +837,7 @@ namespace KinectProject
                     g.DrawLine(redPen, refX, 0, refX, sideView.Height);
                 }
 
-                g.DrawString($"Deepest Z: {deepestZ:F0} mm", new Font("Arial", 9), Brushes.White, refX + 5, 10);
+                g.DrawString($"Deepest Z: {deepestZ:F0} mm", new System.Drawing.Font("Arial", 9), Brushes.White, refX + 5, 10);
 
                 float cobbAngle = CalculateCobbAngle(smoothedPoints);
                 string interpretation = InterpretCobbAngle(cobbAngle);
@@ -940,7 +975,7 @@ namespace KinectProject
                     }
 
                     float zRef = lastSmoothedSpinePoints[maxZIndex].X;
-                    g.DrawString($"Deepest Z: {zRef:F0} mm", new Font("Arial", 9), Brushes.White, fixedDeepestXPixel + 5, 10);
+                    g.DrawString($"Deepest Z: {zRef:F0} mm", new System.Drawing.Font("Arial", 9), Brushes.White, fixedDeepestXPixel + 5, 10);
                 }
 
                 // 🔁 3. Affichage de la distance si curseur proche
@@ -973,7 +1008,7 @@ namespace KinectProject
                     float y = closestPoint.Value.Y;
 
                     string label = $"Z: {zPoint:F1} mm\nDécalage: {lateralDistance:F1} mm";
-                    g.DrawString(label, new Font("Arial", 9), Brushes.Yellow, x + 5, y - 25);
+                    g.DrawString(label, new System.Drawing.Font("Arial", 9), Brushes.Yellow, x + 5, y - 25);
                     g.FillEllipse(Brushes.Yellow, x - 3, y - 3, 6, 6);
                 }
             }
@@ -1010,7 +1045,7 @@ namespace KinectProject
                 g.DrawLine(redPen, xPixel, 0, xPixel, sideBox.Height);
             }
 
-            g.DrawString($"Deepest Z: {xZ:F0} mm", new Font("Arial", 9), Brushes.White, xPixel + 5, 10);
+            g.DrawString($"Deepest Z: {xZ:F0} mm", new System.Drawing.Font("Arial", 9), Brushes.White, xPixel + 5, 10);
         }
 
 
@@ -1116,7 +1151,7 @@ namespace KinectProject
                         g.DrawLine(redDash, xDeep, 0, xDeep, targetHeight);
                     }
 
-                    using (Font font = new Font("Segoe UI", 20, FontStyle.Bold))
+                    using (System.Drawing.Font font = new System.Drawing.Font("Segoe UI", 20, FontStyle.Bold))
                     {
                         g.DrawString($"Profondeur max : {deepestZ:F0} mm", font, Brushes.White, xDeep + 10, 20);
                     }
@@ -1152,18 +1187,6 @@ namespace KinectProject
         }
 
 
-        //private void DrawCobbAngle(Graphics g, float angleDeg, int imageWidth)
-        //{
-        //    using (Font font = new Font("Segoe UI", 16, FontStyle.Bold))
-        //    using (Brush brush = Brushes.Yellow)
-        //    {
-        //        string label = $"Angle Cobbbbb ≈ {angleDeg:F1}°";
-        //        g.DrawString(label, font, brush, imageWidth - 300, 30);
-
-        //        string labelspineAngle = $"Angle sagittal du tronc: ≈ {spineAngle:F2}°";
-        //        g.DrawString(labelspineAngle, font, brush, imageWidth - 300, 30);
-        //    }
-        //}
 
 
         private string InterpretCobbAngle(float angleDeg)
@@ -1190,10 +1213,10 @@ namespace KinectProject
                 g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
                 g.Clear(Color.FromArgb(30, 30, 30));
 
-                using (Font font = new Font("Segoe UI", 12, FontStyle.Bold))
-                using (Font fontSmall = new Font("Segoe UI", 10))
+                using (System.Drawing.Font font = new System.Drawing.Font("Segoe UI", 12, FontStyle.Bold))
+                using (System.Drawing.Font fontSmall = new System.Drawing.Font("Segoe UI", 10))
                 {
-                    g.DrawString($"Angle de Cobbbbbb : {angle:F1}°", font, Brushes.LightGreen, 10, 10);
+                    g.DrawString($"Angle de Cobb : {angle:F1}°", font, Brushes.LightGreen, 10, 10);
                     g.DrawString($"Analyse : {interpretation}", fontSmall, Brushes.White, 10, 40);
                 }
             }
@@ -1213,7 +1236,7 @@ namespace KinectProject
                 g.Clear(Color.FromArgb(30, 30, 30)); // Fond sombre pour meilleure visibilité
                 g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAlias;
                 string angleText = $"Angle sagittal du tronc: {angle:F2}°";
-                using (Font font = new Font("Arial", 14, FontStyle.Bold))
+                using (System.Drawing.Font font = new System.Drawing.Font("Arial", 14, FontStyle.Bold))
                 {
                     g.DrawString(angleText, font, Brushes.White, new System.Drawing.PointF(10, 10));
                 }
@@ -1257,6 +1280,201 @@ namespace KinectProject
             double angleDegrees = angleRadians * (180.0 / Math.PI);
 
             return Math.Round(angleDegrees, 1);
+        }
+
+
+
+
+
+
+        ////////////////////////////////////////////
+        ///////////////////////////////////////////
+
+
+        private void GeneratePdfButton_Click(object sender, EventArgs e)
+        {
+            using (PdfInputForm inputForm = new PdfInputForm())
+            {
+                if (inputForm.ShowDialog() == DialogResult.OK)
+                {
+                    System.Drawing.Image imageToInclude = depthPictureBox?.Image; // ou n'importe quelle autre image disponible
+                    GeneratePatientReport(inputForm, imageToInclude);
+                }
+            }
+        }
+
+        private void GeneratePatientReport(PdfInputForm form, System.Drawing.Image imageToInclude)
+        {
+            try
+            {
+                PdfDocument document = new PdfDocument();
+                document.Info.Title = "Rapport Médical Patient";
+
+                PdfPage page = document.AddPage();
+                XGraphics gfx = XGraphics.FromPdfPage(page);
+
+                XFont titleFont = new XFont("Segoe UI", 18, XFontStyle.Bold);
+                XFont labelFont = new XFont("Segoe UI", 12, XFontStyle.Bold);
+                XFont valueFont = new XFont("Segoe UI", 12, XFontStyle.Regular);
+
+                double margin = 40;
+                double yPoint = margin;
+                double pageHeight = page.Height;
+
+                void CheckPageOverflow(double requiredHeight)
+                {
+                    if (yPoint + requiredHeight > pageHeight - margin)
+                    {
+                        page = document.AddPage();
+                        gfx = XGraphics.FromPdfPage(page);
+                        yPoint = margin;
+                    }
+                }
+
+                // 🟦 Titre
+                gfx.DrawString("Rapport d'analyse posturale", titleFont, XBrushes.DarkBlue,
+                    new XRect(margin, yPoint, page.Width - 2 * margin, 40), XStringFormats.TopCenter);
+                yPoint += 50;
+
+                // 🟦 Infos patient
+                gfx.DrawString("Informations du patient", labelFont, XBrushes.Black, margin, yPoint);
+                yPoint += 25;
+
+                string[] patientInfo = new[]
+                {
+            $"Nom : {form.PatientName}",
+            $"Âge : {form.PatientAge}",
+            $"Sexe : {form.PatientSex}",
+            $"Date de naissance : {form.PatientBirthDate.ToShortDateString()}",
+            $"N° Dossier médical : {form.MedicalRecordNumber}"
+        };
+
+                foreach (var info in patientInfo)
+                {
+                    gfx.DrawString(info, valueFont, XBrushes.Black, margin, yPoint);
+                    yPoint += 20;
+                }
+
+                // 🟦 Antécédents médicaux
+                gfx.DrawString("Antécédents médicaux :", labelFont, XBrushes.Black, margin, yPoint);
+                yPoint += 20;
+
+                XTextFormatter tf = new XTextFormatter(gfx);
+                XRect historyRect = new XRect(margin, yPoint, page.Width - 2 * margin, 80);
+                tf.DrawString(form.MedicalHistory, valueFont, XBrushes.Black, historyRect, XStringFormats.TopLeft);
+                yPoint += 100;
+
+                // 🖼️ Première image
+                if (imageToInclude != null)
+                {
+                    CheckPageOverflow(300); // estimate image height
+                    yPoint = DrawImage(gfx, imageToInclude, page, margin, yPoint);
+                }
+
+                // 🖼️ Texte avant spline
+                CheckPageOverflow(40);
+                gfx.DrawString("Courbe spline (courbure du dos)", labelFont, XBrushes.Black, margin, yPoint);
+                yPoint += 20;
+
+                // 🖼️ Deuxième image spline
+                System.Drawing.Image splineImg = GenerateSpineCurveImageForPdf(500, 600);
+                if (splineImg != null)
+                {
+                    CheckPageOverflow(300);
+                    yPoint = DrawImage(gfx, splineImg, page, margin, yPoint);
+                }
+
+                // 📝 Sauvegarde
+                string filename = $"rapport_{form.PatientName}_{DateTime.Now:yyyyMMddHHmmss}.pdf";
+                string fullPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), filename);
+                document.Save(fullPath);
+                document.Close();
+
+                MessageBox.Show($"PDF généré avec succès à l’emplacement :\n\n{fullPath}", "Succès", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Erreur lors de la génération du PDF :\n" + ex.Message, "Erreur", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private double DrawImage(XGraphics gfx, System.Drawing.Image image, PdfPage page, double margin, double yPoint)
+        {
+            using (var ms = new MemoryStream())
+            {
+                image.Save(ms, ImageFormat.Png);
+                ms.Seek(0, SeekOrigin.Begin);
+
+                XImage xImg = XImage.FromStream(ms);
+
+                double maxWidth = page.Width - 2 * margin;
+                double maxHeight = page.Height - yPoint - margin;
+
+                double imgRatio = (double)xImg.PixelWidth / xImg.PixelHeight;
+                double targetWidth = maxWidth;
+                double targetHeight = targetWidth / imgRatio;
+
+                if (targetHeight > maxHeight)
+                {
+                    targetHeight = maxHeight;
+                    targetWidth = targetHeight * imgRatio;
+                }
+
+                gfx.DrawImage(xImg, margin, yPoint, targetWidth, targetHeight);
+                return yPoint + targetHeight + 20;
+            }
+        }
+
+
+        private System.Drawing.Image GenerateSpineCurveImageForPdf(int width, int height)
+        {
+            if (lastSmoothedSpinePoints == null || lastSmoothedSpinePoints.Count < 2)
+                return null;
+
+            Bitmap bmp = new Bitmap(width, height);
+            using (Graphics g = Graphics.FromImage(bmp))
+            {
+                g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                g.Clear(Color.Black);
+
+                float offsetX = 50f;
+                float scaleX = 0.1f;
+                float scaleY = height / 424f;
+
+                using (Pen spinePen = new Pen(Color.Cyan, 4))
+                {
+                    for (int i = 1; i < lastSmoothedSpinePoints.Count; i++)
+                    {
+                        var p1 = lastSmoothedSpinePoints[i - 1];
+                        var p2 = lastSmoothedSpinePoints[i];
+
+                        float x1 = offsetX + p1.X * scaleX;
+                        float y1 = p1.Y * scaleY;
+                        float x2 = offsetX + p2.X * scaleX;
+                        float y2 = p2.Y * scaleY;
+
+                        g.DrawLine(spinePen, x1, y1, x2, y2);
+                    }
+                }
+
+                if (maxZIndex >= 0 && maxZIndex < lastSmoothedSpinePoints.Count)
+                {
+                    float deepestZ = lastSmoothedSpinePoints[maxZIndex].X;
+                    float xDeep = offsetX + deepestZ * scaleX;
+
+                    using (Pen redDash = new Pen(Color.Red, 3) { DashStyle = System.Drawing.Drawing2D.DashStyle.Dash })
+                    {
+                        g.DrawLine(redDash, xDeep, 0, xDeep, height);
+                    }
+
+                    using (System.Drawing.Font font = new System.Drawing.Font("Segoe UI", 20, FontStyle.Bold))
+                    {
+                        g.DrawString($"Profondeur max : {deepestZ:F0} mm", font, Brushes.White, xDeep + 10, 20);
+                    }
+                }
+            }
+
+            return bmp;
         }
 
     }
