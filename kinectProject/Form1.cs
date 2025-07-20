@@ -1,4 +1,5 @@
 ﻿
+using kinectProject;
 using Microsoft.Kinect;
 using PdfSharp.Drawing;
 using PdfSharp.Drawing.Layout;
@@ -91,8 +92,8 @@ namespace KinectProject
                 }
 
                 kinectSensor.Open();
-                kinectSensor.IsAvailableChanged -= KinectSensor_IsAvailableChanged;
-                kinectSensor.IsAvailableChanged += KinectSensor_IsAvailableChanged;
+               // kinectSensor.IsAvailableChanged -= KinectSensor_IsAvailableChanged;
+                //kinectSensor.IsAvailableChanged += KinectSensor_IsAvailableChanged;
                 coordinateMapper = kinectSensor.CoordinateMapper;
 
                 multiSourceFrameReader = kinectSensor.OpenMultiSourceFrameReader(FrameSourceTypes.Depth | FrameSourceTypes.Body);
@@ -168,7 +169,7 @@ namespace KinectProject
                 TableLayoutPanel controlLayout = new TableLayoutPanel
                 {
                     Dock = DockStyle.Fill,
-                    ColumnCount = 8,
+                    ColumnCount = 9,
                     RowCount = 1,
                     BackColor = Color.Transparent
                 };
@@ -182,25 +183,25 @@ namespace KinectProject
                 controlLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 140));
                 topPanel.Controls.Add(controlLayout);
 
-                Button captureBtn = new Button
-                {
-                    Text = "Capturer Vue 3D",
-                    Dock = DockStyle.Fill,
-                    Height = 36,
-                    BackColor = Color.FromArgb(76, 175, 80),
-                    ForeColor = Color.White,
-                    FlatStyle = FlatStyle.Flat,
-                    Margin = new Padding(2)
-                };
-                captureBtn.FlatAppearance.BorderSize = 0;
-                captureBtn.Click += (s, args) =>
-                {
-                    string label = Microsoft.VisualBasic.Interaction.InputBox("Nom de la vue (ex: face, gauche...)", "Nom vue", "face");
-                    if (string.IsNullOrWhiteSpace(label)) return;
-                    string fileName = $"capture_{label}_{DateTime.Now:HHmmss}.ply";
-                    CapturePointCloud(fileName);
-                };
-                controlLayout.Controls.Add(captureBtn, 0, 0);
+                //Button captureBtn = new Button
+                //{
+                //    Text = "Capturer Vue 3D",
+                //    Dock = DockStyle.Fill,
+                //    Height = 36,
+                //    BackColor = Color.FromArgb(76, 175, 80),
+                //    ForeColor = Color.White,
+                //    FlatStyle = FlatStyle.Flat,
+                //    Margin = new Padding(2)
+                //};
+                //captureBtn.FlatAppearance.BorderSize = 0;
+                //captureBtn.Click += (s, args) =>
+                //{
+                //    string label = Microsoft.VisualBasic.Interaction.InputBox("Nom de la vue (ex: face, gauche...)", "Nom vue", "face");
+                //    if (string.IsNullOrWhiteSpace(label)) return;
+                //    string fileName = $"capture_{label}_{DateTime.Now:HHmmss}.ply";
+                //    CapturePointCloud(fileName);
+                //};
+                //controlLayout.Controls.Add(captureBtn, 0, 0);
 
                 jointSelector1.DropDownStyle = ComboBoxStyle.DropDownList;
                 jointSelector1.Items.AddRange(Enum.GetNames(typeof(JointType)));
@@ -286,6 +287,23 @@ namespace KinectProject
                 generatePdfButton.Click += GeneratePdfButton_Click;
 
                 controlLayout.Controls.Add(generatePdfButton, 7, 0);
+                /////////////////////////
+                ///
+                Button btnOpenBodyAnalyzer = new Button
+                {
+                    Text = "Analyser une Image",
+                    Dock = DockStyle.Fill,
+                    Height = 36,
+                    BackColor = Color.Gray,
+                    ForeColor = Color.White,
+                    FlatStyle = FlatStyle.Flat,
+                    Margin = new Padding(2)
+                };
+                // Add the click event handler:
+                btnOpenBodyAnalyzer.Click += BtnOpenBodyAnalyzer_Click;
+
+                // Add button to your layout
+                controlLayout.Controls.Add(btnOpenBodyAnalyzer, 0, 0);
 
 
 
@@ -1477,6 +1495,21 @@ namespace KinectProject
             return bmp;
         }
 
+
+
+      
+// Define the click event method somewhere in your form class:
+private void BtnOpenBodyAnalyzer_Click(object sender, EventArgs e)
+        {
+            // Create an instance of the BodyPictureAnalyzer form
+            BodyPictureAnalyzer bodyAnalyzerForm = new BodyPictureAnalyzer();
+
+            // Show it as a new window (non-modal)
+            bodyAnalyzerForm.Show();
+
+            // Or if you want it modal (block main window until closed), use:
+            // bodyAnalyzerForm.ShowDialog();
+        }
     }
 
 

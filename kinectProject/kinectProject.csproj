@@ -112,17 +112,35 @@
     <Reference Include="System.Numerics" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="FoReferenceInputDialog.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="FoReferenceInputDialog.Designer.cs">
+      <DependentUpon>FoReferenceInputDialog.cs</DependentUpon>
+    </Compile>
     <Compile Include="Form1.cs">
       <SubType>Form</SubType>
     </Compile>
     <Compile Include="Form1.Designer.cs">
       <DependentUpon>Form1.cs</DependentUpon>
     </Compile>
+    <Compile Include="BodyPictureAnalyzer.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="BodyPictureAnalyzer.Designer.cs">
+      <DependentUpon>BodyPictureAnalyzer.cs</DependentUpon>
+    </Compile>
     <Compile Include="PdfInputForm.cs">
       <SubType>Form</SubType>
     </Compile>
     <Compile Include="Program.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
+    <EmbeddedResource Include="BodyPictureAnalyzer.resx">
+      <DependentUpon>BodyPictureAnalyzer.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="FoReferenceInputDialog.resx">
+      <DependentUpon>FoReferenceInputDialog.cs</DependentUpon>
+    </EmbeddedResource>
     <EmbeddedResource Include="Form1.resx">
       <DependentUpon>Form1.cs</DependentUpon>
     </EmbeddedResource>
