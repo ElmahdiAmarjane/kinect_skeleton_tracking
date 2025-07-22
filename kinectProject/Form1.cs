@@ -47,6 +47,7 @@ namespace KinectProject
         private PictureBox sideBox;
         private PictureBox infoBox;
         private PictureBox angleSpineBox;
+        private PictureBox realAngleCobb;
 
         private List<System.Drawing.PointF> lastSmoothedPoints = new List<System.Drawing.PointF>();
 
@@ -141,7 +142,7 @@ namespace KinectProject
 
                 infoBox = new PictureBox
                 {
-                    Height = 100,
+                    Height = 150,
                     Dock = DockStyle.Bottom,
                     BackColor = Color.Transparent,
                     Visible = true
@@ -156,6 +157,19 @@ namespace KinectProject
                     Visible = true
                 };
                 infoBox.Controls.Add(angleSpineBox);
+                /////////////////////
+
+
+                realAngleCobb = new PictureBox
+                {
+                    Height = 50,
+                    Dock = DockStyle.Bottom,
+                    BackColor = Color.Red,
+                    Visible = true
+                };
+                infoBox.Controls.Add(realAngleCobb);
+
+                /////////////////////
                 // === Top panel with controls ===
                 Panel topPanel = new Panel
                 {
@@ -860,7 +874,9 @@ namespace KinectProject
                 float cobbAngle = CalculateCobbAngle(smoothedPoints);
                 string interpretation = InterpretCobbAngle(cobbAngle);
                 ShowCobbInfo(cobbAngle, interpretation);
-
+                /////////////////
+                float cobbAngleV2 = CalculateCobbAngleV2(smoothedPoints);
+                ShowCobbInfoV2(cobbAngleV2);
 
 
             }
@@ -1231,11 +1247,11 @@ namespace KinectProject
                 g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
                 g.Clear(Color.FromArgb(30, 30, 30));
 
-                using (System.Drawing.Font font = new System.Drawing.Font("Segoe UI", 12, FontStyle.Bold))
-                using (System.Drawing.Font fontSmall = new System.Drawing.Font("Segoe UI", 10))
+                using (System.Drawing.Font font = new System.Drawing.Font("Segoe UI", 8, FontStyle.Regular))
+                using (System.Drawing.Font fontSmall = new System.Drawing.Font("Segoe UI", 8))
                 {
-                    g.DrawString($"Angle de Cobb : {angle:F1}°", font, Brushes.LightGreen, 10, 10);
-                    g.DrawString($"Analyse : {interpretation}", fontSmall, Brushes.White, 10, 40);
+                    g.DrawString($"Angle d’inclinaison vertébrale : {angle:F1}°", font, Brushes.LightGreen, 10, 10);
+                    g.DrawString($"Analyse : {interpretation}", fontSmall, Brushes.White, 10, 30);
                 }
             }
 
@@ -1243,6 +1259,32 @@ namespace KinectProject
             infoBox.Image = bmp;
         }
 
+        private void ShowCobbInfoV2(float angle)
+        {
+            if (realAngleCobb == null) return;
+
+            // ✅ Évite les erreurs dues à taille invalide
+            int w = realAngleCobb.Width;
+            int h = realAngleCobb.Height;
+            if (w <= 0 || h <= 0) return;
+
+            Bitmap bmp = new Bitmap(w, h);
+            using (Graphics g = Graphics.FromImage(bmp))
+            {
+                g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                g.Clear(Color.FromArgb(30, 30, 30));
+
+                using (System.Drawing.Font font = new System.Drawing.Font("Segoe UI", 8, FontStyle.Regular))
+                using (System.Drawing.Font fontSmall = new System.Drawing.Font("Segoe UI", 8))
+                {
+                    g.DrawString($"Angle de Cobb V2 : {angle:F1}°", font, Brushes.LightGreen, 20, 10);
+                  //  g.DrawString($"Analyse : {interpretation}", fontSmall, Brushes.White, 10, 30);
+                }
+            }
+
+            realAngleCobb.Image?.Dispose(); // ✅ Nettoyage ancien bitmap
+            realAngleCobb.Image = bmp;
+        }
 
         private void DrawSpineAngleInInfoBox(double angle)
         {
@@ -1254,9 +1296,9 @@ namespace KinectProject
                 g.Clear(Color.FromArgb(30, 30, 30)); // Fond sombre pour meilleure visibilité
                 g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAlias;
                 string angleText = $"Angle sagittal du tronc: {angle:F2}°";
-                using (System.Drawing.Font font = new System.Drawing.Font("Arial", 14, FontStyle.Bold))
+                using (System.Drawing.Font font = new System.Drawing.Font("Arial", 8, FontStyle.Regular))
                 {
-                    g.DrawString(angleText, font, Brushes.White, new System.Drawing.PointF(10, 10));
+                    g.DrawString(angleText, font, Brushes.LightGreen, new System.Drawing.PointF(10, 10));
                 }
             }
             angleSpineBox.Image?.Dispose(); // Libérer ancienne image
@@ -1510,6 +1552,65 @@ private void BtnOpenBodyAnalyzer_Click(object sender, EventArgs e)
             // Or if you want it modal (block main window until closed), use:
             // bodyAnalyzerForm.ShowDialog();
         }
+
+
+        private float CalculateCobbAngleV2(List<System.Drawing.PointF> spinePoints)
+        {
+            if (spinePoints == null || spinePoints.Count < 10)
+                return 0;
+
+            int count = spinePoints.Count;
+            int segmentSize = count / 4; // prend environ 25% du haut et du bas
+
+            // ---- Partie haute (supérieure de la colonne) ----
+            var topSegment = spinePoints.Take(segmentSize).ToList();
+            var topLine = FitLine(topSegment); // Retourne un vecteur directeur
+
+            // ---- Partie basse (inférieure de la colonne) ----
+            var bottomSegment = spinePoints.Skip(count - segmentSize).ToList();
+            var bottomLine = FitLine(bottomSegment); // Retourne un vecteur directeur
+
+            // ---- Calcul de l’angle entre les deux vecteurs ----
+            float dot = topLine.X * bottomLine.X + topLine.Y * bottomLine.Y;
+            float magTop = (float)Math.Sqrt(topLine.X * topLine.X + topLine.Y * topLine.Y);
+            float magBottom = (float)Math.Sqrt(bottomLine.X * bottomLine.X + bottomLine.Y * bottomLine.Y);
+
+            float angleRad = (float)Math.Acos(dot / (magTop * magBottom));
+            float angleDeg = angleRad * 180f / (float)Math.PI;
+
+            return angleDeg;
+        }
+
+        private System.Drawing.PointF FitLine(List<System.Drawing.PointF> points)
+        {
+            if (points == null || points.Count < 2)
+                return new System.Drawing.PointF(0, 1); // vertical par défaut
+
+            float sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0;
+            int n = points.Count;
+
+            foreach (var p in points)
+            {
+                sumX += p.X;
+                sumY += p.Y;
+                sumXY += p.X * p.Y;
+                sumX2 += p.X * p.X;
+            }
+
+            float meanX = sumX / n;
+            float meanY = sumY / n;
+            float denominator = sumX2 - sumX * meanX;
+
+            // éviter division par zéro
+            if (Math.Abs(denominator) < 1e-6)
+                return new System.Drawing.PointF(0, 1); // vertical
+
+            float slope = (sumXY - sumX * meanY) / denominator;
+
+            // vecteur directeur basé sur la pente
+            return new System.Drawing.PointF(1, slope);
+        }
+
     }
 
 
