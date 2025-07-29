@@ -48,6 +48,7 @@ namespace KinectProject
         private PictureBox infoBox;
         private PictureBox angleSpineBox;
         private PictureBox realAngleCobb;
+        private float cobbAngleV2; 
 
         private List<System.Drawing.PointF> lastSmoothedPoints = new List<System.Drawing.PointF>();
 
@@ -58,7 +59,15 @@ namespace KinectProject
 
         private float fixedDeepestXPixel = -1;  // ← position en pixels sur le sideBox (avec échelle)
         //
-        private double spineAngle; 
+        private double spineAngle;
+
+        ////////////////:
+        ///
+
+        private float _lineX = -1; // X position of the line in pixels
+        private bool _isDraggingLine = false;
+        private const int _lineGrabMargin = 10; // sensitivity zone for grabbing the line
+
 
         ///////////////
         /// <summary>
@@ -604,6 +613,7 @@ namespace KinectProject
             if (kinectSensor != null) kinectSensor.Close();
             base.OnFormClosing(e);
         }
+       
         private void CapturePointCloud(string fileName)
         {
             var multiFrame = multiSourceFrameReader.AcquireLatestFrame();
@@ -875,7 +885,7 @@ namespace KinectProject
                 string interpretation = InterpretCobbAngle(cobbAngle);
                 ShowCobbInfo(cobbAngle, interpretation);
                 /////////////////
-                float cobbAngleV2 = CalculateCobbAngleV2(smoothedPoints);
+                cobbAngleV2 = CalculateCobbAngleV2(smoothedPoints);
                 ShowCobbInfoV2(cobbAngleV2);
 
 
@@ -1419,10 +1429,18 @@ namespace KinectProject
                 gfx.DrawString("Antécédents médicaux :", labelFont, XBrushes.Black, margin, yPoint);
                 yPoint += 20;
 
+              
+
                 XTextFormatter tf = new XTextFormatter(gfx);
                 XRect historyRect = new XRect(margin, yPoint, page.Width - 2 * margin, 80);
                 tf.DrawString(form.MedicalHistory, valueFont, XBrushes.Black, historyRect, XStringFormats.TopLeft);
                 yPoint += 100;
+
+                gfx.DrawString("Resultats Analyse :", labelFont, XBrushes.Black, margin, yPoint);
+                yPoint += 20;
+
+                gfx.DrawString($"Angle de Cobb V2 : {cobbAngleV2:F1}°", valueFont, XBrushes.Black, margin, yPoint);
+                yPoint += 20;
 
                 // 🖼️ Première image
                 if (imageToInclude != null)

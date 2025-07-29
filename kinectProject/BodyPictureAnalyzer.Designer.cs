@@ -17,6 +17,9 @@
         private System.Windows.Forms.Panel panelTop;
         private System.Windows.Forms.Button btnSetReferenceScale;
 
+        private System.Windows.Forms.Button btnTakePhoto;
+        private System.Windows.Forms.Button btnDone;
+
 
         protected override void Dispose(bool disposing)
         {
@@ -198,6 +201,37 @@
             this.btnSetReferenceScale.Text = "SET REFERENCE SCALE";
             this.btnSetReferenceScale.UseVisualStyleBackColor = false;
             this.btnSetReferenceScale.Click += new System.EventHandler(this.btnSetReferenceScale_Click);
+            //
+            // btnTakePhoto
+            this.btnTakePhoto = new System.Windows.Forms.Button();
+            this.btnTakePhoto.BackColor = System.Drawing.Color.FromArgb(0, 123, 255);
+            this.btnTakePhoto.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
+            this.btnTakePhoto.Font = new System.Drawing.Font("Segoe UI", 8.25F);
+            this.btnTakePhoto.ForeColor = System.Drawing.Color.White;
+            this.btnTakePhoto.Location = new System.Drawing.Point(570, 35);
+            this.btnTakePhoto.Name = "btnTakePhoto";
+            this.btnTakePhoto.Size = new System.Drawing.Size(100, 25);
+            this.btnTakePhoto.TabIndex = 5;
+            this.btnTakePhoto.Text = "TAKE PHOTO";
+            this.btnTakePhoto.UseVisualStyleBackColor = false;
+            this.btnTakePhoto.Click += new System.EventHandler(this.btnTakePhoto_Click);
+            this.panelTop.Controls.Add(this.btnTakePhoto);
+
+            // btnDone (hidden initially)
+            this.btnDone = new System.Windows.Forms.Button();
+            this.btnDone.BackColor = System.Drawing.Color.SeaGreen;
+            this.btnDone.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
+            this.btnDone.Font = new System.Drawing.Font("Segoe UI", 8.25F);
+            this.btnDone.ForeColor = System.Drawing.Color.White;
+            this.btnDone.Location = new System.Drawing.Point(680, 35);
+            this.btnDone.Name = "btnDone";
+            this.btnDone.Size = new System.Drawing.Size(100, 25);
+            this.btnDone.TabIndex = 6;
+            this.btnDone.Text = "DONE";
+            this.btnDone.Visible = false;
+            this.btnDone.Click += new System.EventHandler(this.btnDone_Click);
+            this.panelTop.Controls.Add(this.btnDone);
+
 
             // 
             // BodyPictureAnalyzer

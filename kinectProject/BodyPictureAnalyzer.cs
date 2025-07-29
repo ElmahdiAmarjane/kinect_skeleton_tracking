@@ -1,6 +1,11 @@
-﻿using System;
+﻿using Microsoft.Kinect;
+using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Drawing.Imaging;
+using System.IO;
+using System.Linq;
+using System.Runtime.InteropServices;
 using System.Windows.Forms;
 
 namespace kinectProject
@@ -18,6 +23,11 @@ namespace kinectProject
         private float pixelToMmRatio = 1.0f; // Ratio px/mm (initialisé à 1 par défaut)
         private bool isReferenceSet = false; // Indique si l'échelle est calibrée
 
+        private MultiSourceFrameReader _reader;
+        private CoordinateMapper _coordinateMapper;
+        private Bitmap _latestBitmap;
+        private bool _takingPhoto = false;
+        private KinectSensor _kinectSensor;
 
         public BodyPictureAnalyzer()
         {
@@ -291,7 +301,7 @@ namespace kinectProject
                 using (var font = new Font("Segoe UI", 10))
                 {
                     e.Graphics.DrawString("Please import an image first",
-                        font, Brushes.White, new PointF(10, 10));
+                        font, Brushes.White, new System.Drawing.PointF(10, 10));
                 }
                 return;
             }
@@ -427,12 +437,175 @@ namespace kinectProject
 
         private void BodyPictureAnalyzer_Load(object sender, EventArgs e)
         {
-
+            _kinectSensor = KinectSensor.GetDefault();
+            _coordinateMapper = _kinectSensor.CoordinateMapper;
+            _reader = _kinectSensor.OpenMultiSourceFrameReader(FrameSourceTypes.Color);
+            _reader.MultiSourceFrameArrived += Reader_MultiSourceFrameArrived;
+            _kinectSensor.Open();
         }
 
         private void panelTop_Paint(object sender, PaintEventArgs e)
         {
 
         }
+    
+        private void Reader_MultiSourceFrameArrived(object sender, MultiSourceFrameArrivedEventArgs e)
+        {
+            if (!_takingPhoto) return;
+
+            var frameReference = e.FrameReference.AcquireFrame();
+
+            using (var colorFrame = frameReference.ColorFrameReference.AcquireFrame())
+            {
+                if (colorFrame != null)
+                {
+                    FrameDescription desc = colorFrame.FrameDescription;
+                    byte[] pixels = new byte[desc.Width * desc.Height * 4];
+                    colorFrame.CopyConvertedFrameDataToArray(pixels, ColorImageFormat.Bgra);
+
+                    Bitmap bitmap = new Bitmap(desc.Width, desc.Height, PixelFormat.Format32bppArgb);
+                    BitmapData bmpData = bitmap.LockBits(
+                        new Rectangle(0, 0, bitmap.Width, bitmap.Height),
+                        ImageLockMode.WriteOnly,
+                        bitmap.PixelFormat);
+                    Marshal.Copy(pixels, 0, bmpData.Scan0, pixels.Length);
+                    bitmap.UnlockBits(bmpData);
+
+                    using (Graphics g = Graphics.FromImage(bitmap))
+                    {
+                        int rectWidth = 500;
+                        int rectHeight = 1000;
+                        int centerX = bitmap.Width / 2 - rectWidth / 2;
+                        int centerY = bitmap.Height / 2 - rectHeight / 2 ;
+                        Color rectColor = Color.LightGreen; // Change to green later if needed
+
+                        g.DrawRectangle(new Pen(rectColor, 5), centerX, centerY, rectWidth, rectHeight);
+                    }
+
+                    _latestBitmap = (Bitmap)bitmap.Clone();
+                    pictureBox1.Image = _latestBitmap;
+                    bitmap.Dispose();
+                }
+            }
+        }
+
+        private void btnTakePhoto_Click(object sender, EventArgs e)
+        {
+            _takingPhoto = true;
+            btnTakePhoto.Enabled = false;
+            btnDone.Visible = true;
+            btnDone.Enabled = true;
+            
+        }
+
+        private void btnDone_Click(object sender, EventArgs e)
+        {
+            _takingPhoto = false;
+            btnTakePhoto.Enabled = true;
+            btnDone.Visible = false;
+            btnDone.Enabled = false;
+
+            if (_latestBitmap != null)
+            {
+                string path = Path.Combine(Application.StartupPath, "CapturedImage_" + DateTime.Now.Ticks + ".png");
+                _latestBitmap.Save(path, ImageFormat.Png);
+                
+
+                MessageBox.Show("Photo enregistrée : " + path);
+
+             //   DetectCobbAngleFromStickers(_latestBitmap);
+                // Tu peux l'importer ici dans ton PictureBox d’analyse
+               // pictureBox1.Image = Image.FromFile(path); // remplace par ton PictureBox
+            }
+        }
+
+        // Ajoute ce using en haut si manquant
+
+
+private void DetectCobbAngleFromStickers(Bitmap bitmap)
+    {
+        if (bitmap == null)
+        {
+            MessageBox.Show("Aucune image chargée.");
+            return;
+        }
+
+        // 1. Liste pour stocker les points rouges détectés
+        List<Point> redPoints = new List<Point>();
+
+        // 2. Scanner l’image pixel par pixel
+        for (int y = 0; y < bitmap.Height; y += 2) // +2 pour aller plus vite
+        {
+            for (int x = 0; x < bitmap.Width; x += 2)
+            {
+                Color pixel = bitmap.GetPixel(x, y);
+
+                // 3. Détection de rouge : intensité R élevée, G et B faibles
+                //if (pixel.R > 180 && pixel.G < 80 && pixel.B < 80)
+                //{
+                //    redPoints.Add(new Point(x, y));
+                //}
+                    if (pixel.R > 220 && pixel.G > 220 && pixel.B > 220)
+                    {
+                        redPoints.Add(new Point(x, y));
+                    }
+
+                }
+            }
+
+        if (redPoints.Count < 50)
+        {
+            MessageBox.Show("Pas assez de points rouges détectés.");
+            return;
+        }
+
+        // 4. Grouper les points en 3 clusters (k-means simple)
+        var clusteredPoints = redPoints
+            .OrderBy(p => p.Y) // du haut vers le bas (axe Y)
+            .GroupBy(p => redPoints.IndexOf(p) * 3 / redPoints.Count) // 3 groupes approximés
+            .Select(g => new Point(
+                (int)g.Average(p => p.X),
+                (int)g.Average(p => p.Y)
+            ))
+            .ToList();
+
+        if (clusteredPoints.Count < 3)
+        {
+            MessageBox.Show("Impossible de trouver 3 clusters rouges.");
+            return;
+        }
+
+        // 5. Trier les points du haut vers le bas (vertèbres sup -> inf)
+        clusteredPoints = clusteredPoints.OrderBy(p => p.Y).ToList();
+
+        Point upper = clusteredPoints[0];
+        Point middle = clusteredPoints[1];
+        Point lower = clusteredPoints[2];
+
+        // 6. Calcul de l’angle de Cobb (angle entre 2 lignes)
+        double angle = CalculateAngle(middle, upper, lower); // vertex = milieu
+
+        MessageBox.Show($"Angle de Cobb estimé : {angle:F1}°", "Résultat");
+
+        // 7. Affichage visuel (optionnel mais utile)
+        using (Graphics g = Graphics.FromImage(bitmap))
+        {
+            using (Pen pen = new Pen(Color.Yellow, 3))
+            {
+                g.DrawLine(pen, upper, middle);
+                g.DrawLine(pen, middle, lower);
+            }
+
+            foreach (var pt in clusteredPoints)
+            {
+                g.FillEllipse(Brushes.Red, pt.X - 5, pt.Y - 5, 10, 10);
+            }
+        }
+
+        pictureBox1.Image = (Bitmap)bitmap.Clone(); // rafraîchir l’image avec lignes
     }
+
+
+
+}
 }
