@@ -43,7 +43,8 @@ namespace KinectProject
         private CameraSpacePoint? selectedPoint1 = null;
         private CameraSpacePoint? selectedPoint2 = null;
 
-        private PictureBox depthPictureBox; // Make this global if it's not already
+        private PictureBox depthPictureBox; // 
+        private PictureBox normalPictureBox; // 
         private PictureBox sideBox;
         private PictureBox infoBox;
         private PictureBox angleSpineBox;
@@ -64,9 +65,13 @@ namespace KinectProject
         ////////////////:
         ///
 
-        private float _lineX = -1; // X position of the line in pixels
-        private bool _isDraggingLine = false;
-        private const int _lineGrabMargin = 10; // sensitivity zone for grabbing the line
+        private Bitmap lastDepthImage;
+
+        /////////////////////////////
+        ///
+
+        private bool isDraggingRefLine = false;
+        private float manualZRef = -1; // to store manually set Z reference
 
 
         ///////////////
@@ -78,14 +83,28 @@ namespace KinectProject
         Label depthDiffLabel = new Label();
         /////////////////////
         ///
-        private TextBox patientNameTextBox;
-        private TextBox patientAgeTextBox;
-        private Button generatePdfBtn;
+
+
+        //
+        // Horizontal and vertical detection area (in pixels, Kinect depth frame = 512x424)
+        private const int ROI_X = 150;       // Start X (left boundary)
+        private const int ROI_WIDTH = 250;   // Width of the ROI
+        private const int ROI_Y = 5;        // Start Y (top boundary)
+        private const int ROI_HEIGHT = 400;  // Height of the ROI
+
+
+        //
+        private Bitmap colorBitmap;
+        private byte[] colorPixels;
+  
+
 
         public Form1()
         {
            
             InitializeComponent();
+
+
         }
 
         private void Form1_Load(object sender, EventArgs e)
@@ -106,22 +125,43 @@ namespace KinectProject
                 //kinectSensor.IsAvailableChanged += KinectSensor_IsAvailableChanged;
                 coordinateMapper = kinectSensor.CoordinateMapper;
 
-                multiSourceFrameReader = kinectSensor.OpenMultiSourceFrameReader(FrameSourceTypes.Depth | FrameSourceTypes.Body);
+                multiSourceFrameReader = kinectSensor.OpenMultiSourceFrameReader(FrameSourceTypes.Depth | FrameSourceTypes.Body | FrameSourceTypes.Color);
                 multiSourceFrameReader.MultiSourceFrameArrived += MultiSourceFrameReader_MultiSourceFrameArrived;
 
                 depthBitmap = new Bitmap(512, 424, PixelFormat.Format32bppRgb);
                 depthPixels = new byte[512 * 424 * 4];
 
+                colorBitmap = new Bitmap(1920, 1080, PixelFormat.Format32bppArgb);
+                colorPixels = new byte[1920 * 1080 * 4];
+
+
                 // === Main depth view PictureBox ===
                 depthPictureBox = new PictureBox
                 {
-                    Dock = DockStyle.Fill,
-                    BackColor = Color.FromArgb(30, 30, 30),
+                    Width = 400,  // ✅ set a fixed width (for example 400px)
+                    
+                    Dock = DockStyle.Left,  // ✅ align it to the left, don't fill everything
+                    BackColor = Color.FromArgb(10, 100, 144),
                     BorderStyle = BorderStyle.FixedSingle,
                     SizeMode = PictureBoxSizeMode.Zoom
                 };
+
                 this.Controls.Add(depthPictureBox);
                 depthPictureBox.MouseClick += DepthPictureBox_MouseClick;
+                //
+
+                normalPictureBox = new PictureBox
+                {
+                    Width = 400,  // ✅ set a fixed width (for example 400px)
+
+                    Dock = DockStyle.Right,  // ✅ align it to the left, don't fill everything
+                    BackColor = Color.FromArgb(93, 93, 144),
+                    BorderStyle = BorderStyle.FixedSingle,
+                    SizeMode = PictureBoxSizeMode.Zoom
+                };
+
+               // normalPictureBox.SizeMode = PictureBoxSizeMode.Zoom;
+                this.Controls.Add(normalPictureBox);
 
                 // === Right Panel (sideBox + infoBox) ===
                 Panel rightPanel = new Panel
@@ -226,29 +266,56 @@ namespace KinectProject
                 //};
                 //controlLayout.Controls.Add(captureBtn, 0, 0);
 
-                jointSelector1.DropDownStyle = ComboBoxStyle.DropDownList;
-                jointSelector1.Items.AddRange(Enum.GetNames(typeof(JointType)));
-                jointSelector1.SelectedIndex = 0;
-                jointSelector1.Dock = DockStyle.Fill;
-                jointSelector1.BackColor = Color.FromArgb(50, 50, 50);
-                jointSelector1.ForeColor = Color.White;
-                jointSelector1.FlatStyle = FlatStyle.Flat;
-                controlLayout.Controls.Add(jointSelector1, 1, 0);
+                //jointSelector1.DropDownStyle = ComboBoxStyle.DropDownList;
+                //jointSelector1.Items.AddRange(Enum.GetNames(typeof(JointType)));
+                //jointSelector1.SelectedIndex = 0;
+                //jointSelector1.Dock = DockStyle.Fill;
+                //jointSelector1.BackColor = Color.FromArgb(50, 50, 50);
+                //jointSelector1.ForeColor = Color.White;
+                //jointSelector1.FlatStyle = FlatStyle.Flat;
+                //controlLayout.Controls.Add(jointSelector1, 1, 0);
 
-                jointSelector2.DropDownStyle = ComboBoxStyle.DropDownList;
-                jointSelector2.Items.AddRange(Enum.GetNames(typeof(JointType)));
-                jointSelector2.SelectedIndex = 1;
-                jointSelector2.Dock = DockStyle.Fill;
-                jointSelector2.BackColor = Color.FromArgb(50, 50, 50);
-                jointSelector2.ForeColor = Color.White;
-                jointSelector2.FlatStyle = FlatStyle.Flat;
-                controlLayout.Controls.Add(jointSelector2, 2, 0);
+                //jointSelector2.DropDownStyle = ComboBoxStyle.DropDownList;
+                //jointSelector2.Items.AddRange(Enum.GetNames(typeof(JointType)));
+                //jointSelector2.SelectedIndex = 1;
+                //jointSelector2.Dock = DockStyle.Fill;
+                //jointSelector2.BackColor = Color.FromArgb(50, 50, 50);
+                //jointSelector2.ForeColor = Color.White;
+                //jointSelector2.FlatStyle = FlatStyle.Flat;
+                //controlLayout.Controls.Add(jointSelector2, 2, 0);
 
-                depthDiffLabel.Text = "Depth Difference: - mm";
-                depthDiffLabel.Dock = DockStyle.Fill;
-                depthDiffLabel.ForeColor = Color.White;
-                depthDiffLabel.TextAlign = ContentAlignment.MiddleLeft;
-                controlLayout.Controls.Add(depthDiffLabel, 3, 0);
+                //depthDiffLabel.Text = "Depth Difference: - mm";
+                //depthDiffLabel.Dock = DockStyle.Fill;
+                //depthDiffLabel.ForeColor = Color.White;
+                //depthDiffLabel.TextAlign = ContentAlignment.MiddleLeft;
+                //controlLayout.Controls.Add(depthDiffLabel, 3, 0);
+
+
+                Button btnSaveImage = new Button
+                {
+                    Text = "save image",
+                    Dock = DockStyle.Fill,
+                    Height = 36,
+                    BackColor = Color.FromArgb(33, 150, 243),
+                    ForeColor = Color.White,
+                    FlatStyle = FlatStyle.Flat,
+                    Margin = new Padding(2)
+                };
+                btnSaveImage.Click += BtnSaveImage_Click;
+                controlLayout.Controls.Add(btnSaveImage, 4, 0);
+
+                Button btnSaveDepthImage = new Button
+                {
+                    Text = "save depth image",
+                    Dock = DockStyle.Fill,
+                    Height = 36,
+                    BackColor = Color.FromArgb(33, 10, 243),
+                    ForeColor = Color.White,
+                    FlatStyle = FlatStyle.Flat,
+                    Margin = new Padding(2)
+                };
+                btnSaveDepthImage.Click += BtnSaveDepthImage_Click;
+                controlLayout.Controls.Add(btnSaveDepthImage, 3, 0);
 
                 Button sagittalBtn = new Button
                 {
@@ -330,7 +397,19 @@ namespace KinectProject
 
 
 
+                ///////////////////////////////
+                ///
 
+
+                sideBox.MouseDown += SideBox_MouseDown;
+                sideBox.MouseUp += SideBox_MouseUp;
+                sideBox.MouseMove += SideBox_MouseMove; // (You already had this one)
+
+
+
+
+
+                ////////////////////////:
 
 
 
@@ -387,15 +466,57 @@ namespace KinectProject
             var multiSourceFrame = e.FrameReference.AcquireFrame();
             if (multiSourceFrame == null) return;
 
+            // === FRAME DEPTH + BODY ===
             using (var depthFrame = multiSourceFrame.DepthFrameReference.AcquireFrame())
             using (var bodyFrame = multiSourceFrame.BodyFrameReference.AcquireFrame())
             {
                 if (depthFrame != null && bodyFrame != null)
                 {
+
                     ProcessDepthFrameWithBodyContext(depthFrame, bodyFrame);
                 }
             }
+
+            // === FRAME COLOR ===
+            using (var colorFrame = multiSourceFrame.ColorFrameReference.AcquireFrame())
+            {
+                if (colorFrame != null)
+                {
+                    FrameDescription desc = colorFrame.FrameDescription;
+                    if (colorBitmap == null)
+                        colorBitmap = new Bitmap(desc.Width, desc.Height, PixelFormat.Format32bppArgb);
+
+                    if (colorPixels == null || colorPixels.Length != desc.Width * desc.Height * 4)
+                        colorPixels = new byte[desc.Width * desc.Height * 4];
+
+                    // Copier pixels
+                    colorFrame.CopyConvertedFrameDataToArray(colorPixels, ColorImageFormat.Bgra);
+
+                    // Copier dans le bitmap
+                    BitmapData bmpData = colorBitmap.LockBits(
+                        new Rectangle(0, 0, desc.Width, desc.Height),
+                        ImageLockMode.WriteOnly,
+                        PixelFormat.Format32bppArgb);
+                    Marshal.Copy(colorPixels, 0, bmpData.Scan0, colorPixels.Length);
+                    colorBitmap.UnlockBits(bmpData);
+                    Bitmap safeBitmap = (Bitmap)colorBitmap.Clone();
+
+
+
+                    // ✅ Mise à jour UI (sans blocage)
+                    this.BeginInvoke((Action)(() =>
+                    {
+                        Bitmap cropped = CropCenter(safeBitmap, 800, 800); // crop center zone
+                        normalPictureBox.Image?.Dispose();
+                        normalPictureBox.Image = DrawROI(cropped, normalPictureBox);
+                    }));
+
+
+                }
+            }
+      
         }
+
 
         private void ProcessDepthFrameWithBodyContext(DepthFrame depthFrame, BodyFrame bodyFrame)
         {
@@ -406,7 +527,7 @@ namespace KinectProject
                 ushort[] depthData = new ushort[width * height];
                 depthFrame.CopyFrameDataToArray(depthData);
 
-               
+
 
                 Body[] bodies = new Body[bodyFrame.BodyCount];
                 bodyFrame.GetAndRefreshBodyData(bodies);
@@ -428,26 +549,26 @@ namespace KinectProject
 
                 // ***************************************
                 // Get selected joints from ComboBox
-                string jointName1 = jointSelector1.SelectedItem.ToString();
-                string jointName2 = jointSelector2.SelectedItem.ToString();
+                //string jointName1 = jointSelector1.SelectedItem.ToString();
+                //string jointName2 = jointSelector2.SelectedItem.ToString();
 
-                // Convert selected joint names to JointType enum
-                JointType jointType1 = (JointType)Enum.Parse(typeof(JointType), jointName1);
-                JointType jointType2 = (JointType)Enum.Parse(typeof(JointType), jointName2);
+                //// Convert selected joint names to JointType enum
+                //JointType jointType1 = (JointType)Enum.Parse(typeof(JointType), jointName1);
+                //JointType jointType2 = (JointType)Enum.Parse(typeof(JointType), jointName2);
 
-                // Get depth values of the selected joints
-                CameraSpacePoint position1 = trackedBody.Joints[jointType1].Position;
-                CameraSpacePoint position2 = trackedBody.Joints[jointType2].Position;
+                //// Get depth values of the selected joints
+                //CameraSpacePoint position1 = trackedBody.Joints[jointType1].Position;
+                //CameraSpacePoint position2 = trackedBody.Joints[jointType2].Position;
 
-                // Convert to millimeters
-                ushort depth1 = (ushort)(position1.Z * 1000);
-                ushort depth2 = (ushort)(position2.Z * 1000);
+                //// Convert to millimeters
+                //ushort depth1 = (ushort)(position1.Z * 1000);
+                //ushort depth2 = (ushort)(position2.Z * 1000);
 
-                // Calculate depth difference
-                int depthDifference = Math.Abs(depth1 - depth2);
+                //// Calculate depth difference
+                //int depthDifference = Math.Abs(depth1 - depth2);
 
-                // Update the label
-                depthDiffLabel.Text = $"{jointName1}-{jointName2} Depth Diff: {depthDifference} mm";
+                //// Update the label
+                //depthDiffLabel.Text = $"{jointName1}-{jointName2} Depth Diff: {depthDifference} mm";
 
                 // ***************************************
 
@@ -527,7 +648,7 @@ namespace KinectProject
                 Console.WriteLine("Error: " + ex.Message);
             }
         }
-
+       
         private void SetPixelColor(int index, byte r, byte g, byte b)
         {
             depthPixels[index * 4] = b;
@@ -535,6 +656,9 @@ namespace KinectProject
             depthPixels[index * 4 + 2] = r;
             depthPixels[index * 4 + 3] = 255;
         }
+
+
+
 
         private void UpdateBitmap(int width, int height)
         {
@@ -552,6 +676,7 @@ namespace KinectProject
                 pictureBox.Image = depthBitmap;
             }
         }
+
 
         private void DepthPictureBox_MouseClick(object sender, MouseEventArgs e)
         {
@@ -614,123 +739,6 @@ namespace KinectProject
             base.OnFormClosing(e);
         }
        
-        private void CapturePointCloud(string fileName)
-        {
-            var multiFrame = multiSourceFrameReader.AcquireLatestFrame();
-            if (multiFrame == null)
-            {
-                MessageBox.Show("MultiSourceFrame indisponible.");
-                return;
-            }
-
-            using (var depthFrame = multiFrame.DepthFrameReference.AcquireFrame())
-            using (var colorFrame = multiFrame.ColorFrameReference.AcquireFrame())
-            {
-                if (depthFrame == null || colorFrame == null)
-                {
-                    MessageBox.Show("DepthFrame ou ColorFrame indisponible.");
-                    return;
-                }
-
-                int width = depthFrame.FrameDescription.Width;
-                int height = depthFrame.FrameDescription.Height;
-
-                ushort[] depthData = new ushort[width * height];
-                depthFrame.CopyFrameDataToArray(depthData);
-
-                CameraSpacePoint[] cameraPoints = new CameraSpacePoint[width * height];
-                coordinateMapper.MapDepthFrameToCameraSpace(depthData, cameraPoints);
-
-                // Ta plage habituelle pour le corps (en mm converti en m)
-                const ushort BODY_DETECTION_MIN_DEPTH = 500;
-                const ushort BODY_DETECTION_MAX_DEPTH = 2000;
-                const int DEPTH_WINDOW = 200;
-
-                // Pour chaque point on calcule la couleur selon la profondeur autour de la base de la colonne vertébrale (SpineMid)
-                // Cherchons la profondeur de référence (si tu veux, sinon on peut prendre la moyenne des profondeurs valides)
-                // Ici, on prend la profondeur médiane des points valides pour plus de stabilité
-                var validDepths = depthData.Where(d => d >= BODY_DETECTION_MIN_DEPTH && d <= BODY_DETECTION_MAX_DEPTH).ToArray();
-                if (validDepths.Length == 0)
-                {
-                    MessageBox.Show("Aucune profondeur valide dans la plage.");
-                    return;
-                }
-                ushort referenceDepth = validDepths[validDepths.Length / 2];
-
-                // Fenêtre adaptative autour de cette profondeur
-                ushort minDepth = (ushort)Math.Max(referenceDepth - DEPTH_WINDOW, BODY_DETECTION_MIN_DEPTH);
-                ushort maxDepth = (ushort)Math.Min(referenceDepth + DEPTH_WINDOW, BODY_DETECTION_MAX_DEPTH);
-
-                // Compter points valides
-                int validPointsCount = 0;
-                for (int i = 0; i < cameraPoints.Length; i++)
-                {
-                    var cp = cameraPoints[i];
-                    if (float.IsInfinity(cp.X) || float.IsNaN(cp.X)) continue;
-
-                    // Convertir profondeur en mm
-                    int depthInMM = (int)(cp.Z * 1000);
-                    if (depthInMM < minDepth || depthInMM > maxDepth) continue;
-
-                    validPointsCount++;
-                }
-
-                using (var writer = new StreamWriter(fileName))
-                {
-                    // Écrire header PLY
-                    writer.WriteLine("ply");
-                    writer.WriteLine("format ascii 1.0");
-                    writer.WriteLine($"element vertex {validPointsCount}");
-                    writer.WriteLine("property float x");
-                    writer.WriteLine("property float y");
-                    writer.WriteLine("property float z");
-                    writer.WriteLine("property uchar red");
-                    writer.WriteLine("property uchar green");
-                    writer.WriteLine("property uchar blue");
-                    writer.WriteLine("end_header");
-
-                    for (int i = 0; i < cameraPoints.Length; i++)
-                    {
-                        var cp = cameraPoints[i];
-                        if (float.IsInfinity(cp.X) || float.IsNaN(cp.X)) continue;
-
-                        int depthInMM = (int)(cp.Z * 1000);
-                        if (depthInMM < minDepth || depthInMM > maxDepth) continue;
-
-                        // Normaliser profondeur entre minDepth et maxDepth
-                        double normalizedDepth = (depthInMM - minDepth) / (double)(maxDepth - minDepth);
-
-                        byte r, g, b;
-
-                        if (normalizedDepth < 0.33)
-                        {
-                            // Rouge à Jaune
-                            r = 255;
-                            g = (byte)(normalizedDepth * 3 * 255);
-                            b = 0;
-                        }
-                        else if (normalizedDepth < 0.66)
-                        {
-                            // Jaune à Vert
-                            r = (byte)((0.66 - normalizedDepth) * 3 * 255);
-                            g = 255;
-                            b = 0;
-                        }
-                        else
-                        {
-                            // Vert à Bleu
-                            r = 0;
-                            g = (byte)((1 - normalizedDepth) * 3 * 255);
-                            b = (byte)(normalizedDepth * 255);
-                        }
-
-                        writer.WriteLine($"{cp.X} {cp.Y} {cp.Z} {r} {g} {b}");
-                    }
-                }
-
-                MessageBox.Show($"Nuage de points 3D coloré selon profondeur enregistré :\n{fileName}");
-            }
-        }
 
         // 29/06
         private void DrawSpineOnBitmap(Body body)
@@ -783,7 +791,7 @@ namespace KinectProject
         //03/07
 
         // AJOUTER CETTE MÉTHODE DANS Form1
-        private void DrawDepthSpineCurve(ushort[] depthData)
+        private void DrawDepthSpineCurve(ushort[] depthData, Body trackedBody)
         {
             int width = 512;
             int height = 424;
@@ -794,10 +802,27 @@ namespace KinectProject
             float maxZ = float.MinValue;
             maxZIndex = -1;
 
-            // Sample multiple center columns and apply median filter
-            for (int y = 0; y < height; y += 1)
+            // --- Get reference joints ---
+            CameraSpacePoint neckPos = trackedBody.Joints[JointType.Neck].Position;
+            CameraSpacePoint basePos = trackedBody.Joints[JointType.SpineBase].Position;
+
+            DepthSpacePoint neckDepth = coordinateMapper.MapCameraPointToDepthSpace(neckPos);
+            DepthSpacePoint baseDepth = coordinateMapper.MapCameraPointToDepthSpace(basePos);
+
+            int startY = (int)Math.Max(0, neckDepth.Y);
+            int endY = (int)Math.Min(height - 1, baseDepth.Y);
+
+            if (endY <= startY)
+            {
+                sideBox.Image = sideView;
+                return;
+            }
+
+            // --- Sample center columns with median filtering ---
+            for (int y = startY; y <= endY; y++)
             {
                 List<float> zSamples = new List<float>();
+
                 for (int dx = -2; dx <= 2; dx++)
                 {
                     int x = centerX + dx;
@@ -811,7 +836,7 @@ namespace KinectProject
                     CameraSpacePoint cp = coordinateMapper.MapDepthPointToCameraSpace(
                         new DepthSpacePoint { X = x, Y = y }, depth);
 
-                    zSamples.Add(cp.Z * 1000f); // in mm
+                    zSamples.Add(cp.Z * 1000f); // convert to mm
                 }
 
                 if (zSamples.Count >= 3)
@@ -833,16 +858,16 @@ namespace KinectProject
                 return;
             }
 
+            // --- Smooth & interpolate curve ---
             var filtered = FilterDepthPoints(rawPoints);
             var gaussianed = GaussianSmooth(filtered, 5, 2.0);
             List<System.Drawing.PointF> smoothedPoints = InterpolateSpinePoints(gaussianed);
 
+            // --- Draw curve ---
             using (Graphics g = Graphics.FromImage(sideView))
             {
                 g.Clear(Color.Black);
-
                 g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-
 
                 using (Pen spinePen = new Pen(Color.Cyan, 3))
                 {
@@ -857,7 +882,7 @@ namespace KinectProject
                     }
                 }
 
-                // Trouver le point le plus profond après interpolation
+                // --- Find deepest point ---
                 float deepestZ = float.MinValue;
                 float deepestX = 0;
 
@@ -867,12 +892,13 @@ namespace KinectProject
                     {
                         deepestZ = smoothedPoints[i].X;
                         deepestX = smoothedPoints[i].X;
-                        maxZIndex = i; // mets à jour maxZIndex basé sur smoothedPoints
+                        maxZIndex = i;
                     }
                 }
 
                 float refX = 50 + deepestX * 0.1f;
-                fixedDeepestXPixel = refX; // 🟢 stocké pour le MouseMove
+                fixedDeepestXPixel = refX;
+
 
                 using (Pen redPen = new Pen(Color.Red, 2) { DashStyle = System.Drawing.Drawing2D.DashStyle.Dash })
                 {
@@ -881,21 +907,17 @@ namespace KinectProject
 
                 g.DrawString($"Deepest Z: {deepestZ:F0} mm", new System.Drawing.Font("Arial", 9), Brushes.White, refX + 5, 10);
 
+                // --- Calculate and show Cobb angles ---
                 float cobbAngle = CalculateCobbAngle(smoothedPoints);
                 string interpretation = InterpretCobbAngle(cobbAngle);
                 ShowCobbInfo(cobbAngle, interpretation);
-                /////////////////
+
                 cobbAngleV2 = CalculateCobbAngleV2(smoothedPoints);
                 ShowCobbInfoV2(cobbAngleV2);
-
-
             }
-
 
             lastSmoothedSpinePoints = smoothedPoints;
             sideBox.Image = sideView;
-
-
         }
 
         private List<System.Drawing.PointF> InterpolateSpinePoints(List<System.Drawing.PointF> points)
@@ -964,14 +986,17 @@ namespace KinectProject
             return smoothed;
         }
 
+
+
         private void SagittalBtn_Click(object sender, EventArgs e)
         {
             var multiFrame = multiSourceFrameReader.AcquireLatestFrame();
             if (multiFrame == null) return;
 
             using (var depthFrame = multiFrame.DepthFrameReference.AcquireFrame())
+            using (var bodyFrame = multiFrame.BodyFrameReference.AcquireFrame())
             {
-                if (depthFrame == null) return;
+                if (depthFrame == null || bodyFrame == null) return;
 
                 int width = depthFrame.FrameDescription.Width;
                 int height = depthFrame.FrameDescription.Height;
@@ -979,25 +1004,45 @@ namespace KinectProject
                 ushort[] depthData = new ushort[width * height];
                 depthFrame.CopyFrameDataToArray(depthData);
 
+                // Smooth depth data
                 ushort[] smooth = SmoothDepthData(depthData, width, height);
-                DrawDepthSpineCurve(smooth); // 🎯 appelle uniquement ici !
+
+                // Get tracked body
+                Body[] bodies = new Body[bodyFrame.BodyCount];
+                bodyFrame.GetAndRefreshBodyData(bodies);
+
+                Body trackedBody = bodies.FirstOrDefault(b => b.IsTracked);
+                if (trackedBody == null) return;
+
+                // ✅ Call updated method
+                DrawDepthSpineCurve(smooth, trackedBody);
             }
         }
 
 
+
         private void SideBox_MouseMove(object sender, MouseEventArgs e)
         {
-            if (lastSmoothedSpinePoints == null || lastSmoothedSpinePoints.Count == 0 || maxZIndex < 0 || maxZIndex >= lastSmoothedSpinePoints.Count)
+            if (lastSmoothedSpinePoints == null || lastSmoothedSpinePoints.Count == 0)
                 return;
+
+            // ✅ If dragging, move the reference line
+            if (isDraggingRefLine)
+            {
+                fixedDeepestXPixel = e.X;
+
+                // Convert dragged pixel position back to Z value
+                manualZRef = (fixedDeepestXPixel - 50) / 0.1f;
+                sideBox.Invalidate();
+            }
 
             Bitmap sideView = new Bitmap(sideBox.Width, sideBox.Height);
             using (Graphics g = Graphics.FromImage(sideView))
             {
                 g.Clear(Color.Black);
-
                 g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
 
-                // 🔁 1. Redessiner la courbe depuis lastSmoothedSpinePoints
+                // 1️⃣ Draw spine curve
                 using (Pen pen = new Pen(Color.Cyan, 3))
                 {
                     for (int i = 1; i < lastSmoothedSpinePoints.Count; i++)
@@ -1010,19 +1055,17 @@ namespace KinectProject
                     }
                 }
 
-                // 🔁 2. Ligne rouge fixe (Z le plus profond)
-                if (fixedDeepestXPixel > 0)
+                // 2️⃣ Draw red reference line (auto or manual)
+                float zRef = (manualZRef > 0) ? manualZRef : lastSmoothedSpinePoints[maxZIndex].X;
+                fixedDeepestXPixel = (manualZRef > 0) ? fixedDeepestXPixel : 50 + zRef * 0.1f;
+
+                using (Pen redPen = new Pen(Color.Red, 2) { DashStyle = System.Drawing.Drawing2D.DashStyle.Dash })
                 {
-                    using (Pen redPen = new Pen(Color.Red, 2) { DashStyle = System.Drawing.Drawing2D.DashStyle.Dash })
-                    {
-                        g.DrawLine(redPen, fixedDeepestXPixel, 0, fixedDeepestXPixel, sideView.Height);
-                    }
-
-                    float zRef = lastSmoothedSpinePoints[maxZIndex].X;
-                    g.DrawString($"Deepest Z: {zRef:F0} mm", new System.Drawing.Font("Arial", 9), Brushes.White, fixedDeepestXPixel + 5, 10);
+                    g.DrawLine(redPen, fixedDeepestXPixel, 0, fixedDeepestXPixel, sideView.Height);
                 }
+                g.DrawString($"Ref Z: {zRef:F0} mm", new Font("Arial", 9), Brushes.White, fixedDeepestXPixel + 5, 10);
 
-                // 🔁 3. Affichage de la distance si curseur proche
+                // 3️⃣ Distance from nearest point to reference
                 float minDistance = 10f;
                 System.Drawing.PointF? closestPoint = null;
 
@@ -1030,7 +1073,6 @@ namespace KinectProject
                 {
                     float x = 50 + pt.X * 0.1f;
                     float y = pt.Y;
-
                     float dx = e.X - x;
                     float dy = e.Y - y;
                     float dist = (float)Math.Sqrt(dx * dx + dy * dy);
@@ -1045,14 +1087,13 @@ namespace KinectProject
                 if (closestPoint != null)
                 {
                     float zPoint = closestPoint.Value.X;
-                    float zRef = lastSmoothedSpinePoints[maxZIndex].X;
                     float lateralDistance = Math.Abs(zPoint - zRef);
 
                     float x = 50 + closestPoint.Value.X * 0.1f;
                     float y = closestPoint.Value.Y;
 
                     string label = $"Z: {zPoint:F1} mm\nDécalage: {lateralDistance:F1} mm";
-                    g.DrawString(label, new System.Drawing.Font("Arial", 9), Brushes.Yellow, x + 5, y - 25);
+                    g.DrawString(label, new Font("Arial", 9), Brushes.Yellow, x + 5, y - 25);
                     g.FillEllipse(Brushes.Yellow, x - 3, y - 3, 6, 6);
                 }
             }
@@ -1061,6 +1102,23 @@ namespace KinectProject
             sideBox.Image = sideView;
         }
 
+        private void SideBox_MouseDown(object sender, MouseEventArgs e)
+        {
+            if (fixedDeepestXPixel > 0 && Math.Abs(e.X - fixedDeepestXPixel) < 10)
+            {
+                isDraggingRefLine = true;
+                this.Cursor = Cursors.SizeWE;
+            }
+        }
+
+        private void SideBox_MouseUp(object sender, MouseEventArgs e)
+        {
+            if (isDraggingRefLine)
+            {
+                isDraggingRefLine = false;
+                this.Cursor = Cursors.Default;
+            }
+        }
 
 
         private List<System.Drawing.PointF> FilterDepthPoints(List<System.Drawing.PointF> points)
@@ -1076,22 +1134,7 @@ namespace KinectProject
         }
 
 
-        private void DrawFixedDeepestLine(Graphics g, List<System.Drawing.PointF> spinePoints, int maxZIdx)
-        {
-            if (spinePoints == null || spinePoints.Count == 0 || maxZIdx < 0 || maxZIdx >= spinePoints.Count)
-                return;
-
-            float xZ = spinePoints[maxZIdx].X;
-            float xPixel = 50 + xZ * 0.1f;
-
-            using (Pen redPen = new Pen(Color.Red, 2) { DashStyle = System.Drawing.Drawing2D.DashStyle.Dash })
-            {
-                g.DrawLine(redPen, xPixel, 0, xPixel, sideBox.Height);
-            }
-
-            g.DrawString($"Deepest Z: {xZ:F0} mm", new System.Drawing.Font("Arial", 9), Brushes.White, xPixel + 5, 10);
-        }
-
+   
 
         //13/07
         List<System.Drawing.PointF> GaussianSmooth(List<System.Drawing.PointF> raw, int radius = 3, double sigma = 1.0)
@@ -1628,6 +1671,105 @@ private void BtnOpenBodyAnalyzer_Click(object sender, EventArgs e)
             // vecteur directeur basé sur la pente
             return new System.Drawing.PointF(1, slope);
         }
+
+   
+
+        private Bitmap DrawROI(Bitmap image, PictureBox box)
+        {
+            if (image == null || image.Width <= 0 || image.Height <= 0)
+                return null;
+
+            Bitmap output = new Bitmap(box.Width, box.Height);
+            using (Graphics g = Graphics.FromImage(output))
+            {
+                g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                g.DrawImage(image, 0, 0, box.Width, box.Height);
+
+                float scaleX = (float)box.Width / 512f;  // Depth base width
+                float scaleY = (float)box.Height / 424f; // Depth base height
+
+                using (Pen pen = new Pen(Color.LimeGreen, 2))
+                {
+                    g.DrawRectangle(pen,
+                        ROI_X * scaleX,
+                        ROI_Y * scaleY,
+                        ROI_WIDTH * scaleX,
+                        ROI_HEIGHT * scaleY);
+                }
+            }
+            return output;
+        }
+        private Bitmap CropCenter(Bitmap source, int targetWidth, int targetHeight)
+        {
+            if (source == null) return null;
+
+            int x = Math.Max(0, (source.Width - targetWidth) / 2);
+            int y = Math.Max(0, (source.Height - targetHeight) / 2);
+
+            targetWidth = Math.Min(targetWidth, source.Width);
+            targetHeight = Math.Min(targetHeight, source.Height);
+
+            Rectangle cropArea = new Rectangle(x, y, targetWidth, targetHeight);
+            return source.Clone(cropArea, source.PixelFormat);
+        }
+
+        private void BtnSaveImage_Click(object sender, EventArgs e)
+        {
+            try
+            {
+                if (normalPictureBox.Image == null)
+                {
+                    MessageBox.Show("No image available to save.", "Info", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
+
+                using (SaveFileDialog sfd = new SaveFileDialog())
+                {
+                    sfd.Filter = "PNG Image|*.png|JPEG Image|*.jpg";
+                    sfd.FileName = $"Kinect_Capture_{DateTime.Now:yyyyMMdd_HHmmss}.png";
+
+                    if (sfd.ShowDialog() == DialogResult.OK)
+                    {
+                        normalPictureBox.Image.Save(sfd.FileName);
+                        MessageBox.Show("Image saved successfully!", "Success", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Error saving image: " + ex.Message, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+
+        private void BtnSaveDepthImage_Click(object sender, EventArgs e)
+        {
+            try
+            {
+                if (depthPictureBox.Image == null)
+                {
+                    MessageBox.Show("No depth image available to save.", "Info", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
+
+                using (SaveFileDialog sfd = new SaveFileDialog())
+                {
+                    sfd.Filter = "PNG Image|*.png|JPEG Image|*.jpg";
+                    sfd.FileName = $"Kinect_Depth_{DateTime.Now:yyyyMMdd_HHmmss}.png";
+
+                    if (sfd.ShowDialog() == DialogResult.OK)
+                    {
+                        depthPictureBox.Image.Save(sfd.FileName);
+                        MessageBox.Show("Depth image saved successfully!", "Success", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Error saving depth image: " + ex.Message, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
 
     }
 

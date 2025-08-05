@@ -22,12 +22,24 @@ namespace kinectProject
         ////
         private float pixelToMmRatio = 1.0f; // Ratio px/mm (initialisé à 1 par défaut)
         private bool isReferenceSet = false; // Indique si l'échelle est calibrée
+        /// <summary>
+        /// //
+        /// </summary>
+        private bool showPlan = true;
+        private Point planCenter;
+        private bool isDraggingPlan = false;
+        private const int planGrabRadius = 10; // sensitivity for grabbing the center
 
-        private MultiSourceFrameReader _reader;
-        private CoordinateMapper _coordinateMapper;
-        private Bitmap _latestBitmap;
-        private bool _takingPhoto = false;
-        private KinectSensor _kinectSensor;
+        /// <summary>
+        /// /
+        /// </summary>
+         
+        private Point? lastAngleVertex = null;
+        private AxisType lastAngleAxis;
+        private double lastLineAngle = 0;
+
+        private List<(Point vertex, double refAngle, double lineAngle, AxisType axis)> highlightedAngles
+    = new List<(Point vertex, double refAngle, double lineAngle, AxisType axis)>();
 
         public BodyPictureAnalyzer()
         {
@@ -38,29 +50,7 @@ namespace kinectProject
           //  pictureBox1.MouseDown += PictureBox1_MouseDown; // Nouvel événement
            
         }
-        //private void PictureBox1_MouseDown(object sender, MouseEventArgs e)
-        //{
-        //    if (e.Button == MouseButtons.Right)
-        //    {
-        //        if (pictureBox1.Image == null) return;
-
-        //        if (measurements.Count > 1 && measurements[measurements.Count - 1].Type == MeasurementType.Distance)
-        //        {
-        //            using (var input = new ForReferenceInputDialog())
-        //            {
-        //                if (input.ShowDialog(this) == DialogResult.OK)
-        //                {
-        //                    SetScaleFromReference(input.ReferenceLength);
-        //                    pictureBox1.Invalidate();
-        //                }
-        //            }
-        //        }
-        //        else
-        //        {
-        //            MessageBox.Show("Tracez d'abord une ligne de référence en mode Distance");
-        //        }
-        //    }
-        //}
+      
 
         private void btnSetReferenceScale_Click(object sender, EventArgs e)
         {
@@ -151,6 +141,11 @@ namespace kinectProject
                         isReferenceSet = false; // Réinitialiser l'échelle
                         pixelToMmRatio = 1.0f; // Réinitialiser le ratio
                         UpdateModeDisplay();
+
+                        // ✅ Initialize plan center at image center
+                        planCenter = new Point(pictureBox1.Width / 2, pictureBox1.Height / 2);
+
+                        UpdateModeDisplay();
                         pictureBox1.Invalidate();
                     }
                     catch (Exception ex)
@@ -165,8 +160,15 @@ namespace kinectProject
         {
             if (e.Button != MouseButtons.Left || pictureBox1.Image == null) return;
 
-            if (pictureBox1.Image == null) return;
+            // ✅ 1) If clicking on the plan center, ignore normal measurement click
+            double dist = Math.Sqrt(Math.Pow(e.X - planCenter.X, 2) + Math.Pow(e.Y - planCenter.Y, 2));
+            if (dist <= planGrabRadius)
+            {
+                // Plan drag click → do NOT create a point
+                return;
+            }
 
+            // ✅ 2) Normal behavior for placing points
             if (currentStartPoint == null)
             {
                 currentStartPoint = e.Location;
@@ -176,9 +178,55 @@ namespace kinectProject
             }
             else
             {
+                if (angleWithPlanMode)
+                {
+                    if (currentStartPoint == null)
+                    {
+                        currentStartPoint = e.Location;
+                    }
+                    else
+                    {
+                        // Complete the line
+                        Point start = currentStartPoint.Value;
+                        Point end = e.Location;
+
+                        // Ask which axis to compare
+                        var result = MessageBox.Show("Use X-axis? (No = Y-axis)",
+                            "Choose Axis", MessageBoxButtons.YesNo);
+                        bool useXAxis = (result == DialogResult.Yes);
+
+                        double angle = CalculateAngleWithPlan(start, end, useXAxis);
+
+                        //////////////////
+
+                        // Store for drawing later
+                        //lastAngleVertex = start;
+                        //lastAngleAxis = useXAxis ? AxisType.X : AxisType.Y;
+                        //lastLineAngle = Math.Atan2(end.Y - start.Y, end.X - start.X);
+                        double refAngle = (useXAxis ? 0 : Math.PI / 2);
+                        double lineAngle = Math.Atan2(end.Y - start.Y, end.X - start.X);
+
+                        // ✅ Store all highlights
+                        highlightedAngles.Add((start, refAngle, lineAngle, useXAxis ? AxisType.X : AxisType.Y));
+
+
+                        /////////////////
+
+                        // ✅ Store as AngleWithPlan directly
+                        measurements.Add(new Measurement(start, end, $"P{measurementCounter++}", MeasurementType.AngleWithPlan));
+
+                        lstMeasurements.Items.Add($"P{measurementCounter++} Angle vs {(useXAxis ? "X-axis" : "Y-axis")}: {angle:F1}°");
+
+                        currentStartPoint = null;
+                      //  angleWithPlanMode = false;
+                        pictureBox1.Invalidate();
+                    }
+                    return; // ✅ Stop here to avoid adding a Distance line
+                }
+
+
                 if (currentMode == MeasurementMode.Distance)
                 {
-                    // Complete distance measurement
                     measurements.Add(new Measurement(
                         currentStartPoint.Value,
                         e.Location,
@@ -188,13 +236,12 @@ namespace kinectProject
                     currentStartPoint = null;
                     CalculateMeasurements();
                 }
-                else // Angle mode
+                else
                 {
                     if (measurements.Count > 0 && measurements[measurements.Count - 1].Type == MeasurementType.AngleSegment1)
                     {
-                        // Complete angle measurement (second segment)
                         measurements.Add(new Measurement(
-                            measurements[measurements.Count - 1].End, // Connect to previous segment
+                            measurements[measurements.Count - 1].End,
                             e.Location,
                             $"A{measurementCounter++}",
                             MeasurementType.AngleSegment2));
@@ -204,14 +251,13 @@ namespace kinectProject
                     }
                     else
                     {
-                        // First segment of angle measurement
                         measurements.Add(new Measurement(
                             currentStartPoint.Value,
                             e.Location,
                             $"A{measurementCounter++}",
                             MeasurementType.AngleSegment1));
 
-                        currentStartPoint = e.Location; // Next segment starts here
+                        currentStartPoint = e.Location;
                         toolStripStatusLabel1.Text = "Click to place end point of second segment";
                     }
                 }
@@ -296,6 +342,14 @@ namespace kinectProject
 
         private void pictureBox1_Paint(object sender, PaintEventArgs e)
         {
+            // ✅ Draw all highlighted angles
+            foreach (var angleData in highlightedAngles)
+            {
+                DrawAngleHighlight(e.Graphics, angleData.vertex, angleData.refAngle, angleData.lineAngle);
+            }
+
+
+
             if (pictureBox1.Image == null)
             {
                 using (var font = new Font("Segoe UI", 10))
@@ -305,6 +359,29 @@ namespace kinectProject
                 }
                 return;
             }
+
+          
+            // === ✅ Draw XY Plan ===
+            if (showPlan)
+            {
+                using (Pen axisPen = new Pen(Color.Red, 1.5f))
+                {
+                    axisPen.DashStyle = System.Drawing.Drawing2D.DashStyle.Dash;
+
+                    // Horizontal line (X-axis)
+                    e.Graphics.DrawLine(axisPen, 0, planCenter.Y, pictureBox1.Width, planCenter.Y);
+
+                    // Vertical line (Y-axis)
+                    e.Graphics.DrawLine(axisPen, planCenter.X, 0, planCenter.X, pictureBox1.Height);
+                }
+
+                // Draw draggable center point
+                using (Brush grabBrush = new SolidBrush(Color.Yellow))
+                {
+                    e.Graphics.FillEllipse(grabBrush, planCenter.X - 5, planCenter.Y - 5, 10, 10);
+                }
+            }
+
 
             // Draw all measurements
             foreach (var m in measurements)
@@ -384,12 +461,50 @@ namespace kinectProject
             }
         }
 
+        private void pictureBox1_MouseDown(object sender, MouseEventArgs e)
+        {
+            if (showPlan && e.Button == MouseButtons.Left)
+            {
+                double dist = Math.Sqrt(Math.Pow(e.X - planCenter.X, 2) + Math.Pow(e.Y - planCenter.Y, 2));
+                if (dist <= planGrabRadius)
+                {
+                    isDraggingPlan = true;
+                    Cursor = Cursors.Hand;
+                }
+            }
+        }
+
+        private void pictureBox1_MouseMove(object sender, MouseEventArgs e)
+        {
+            if (isDraggingPlan)
+            {
+                planCenter = e.Location;
+                pictureBox1.Invalidate();
+            }
+        }
+
+        private void pictureBox1_MouseUp(object sender, MouseEventArgs e)
+        {
+            if (isDraggingPlan)
+            {
+                isDraggingPlan = false;
+                Cursor = Cursors.Default;
+            }
+        }
+
+
         private void btnClear_Click(object sender, EventArgs e)
         {
             measurements.Clear();
             lstMeasurements.Items.Clear();
             currentStartPoint = null;
             measurementCounter = 1;
+            //
+            // ✅ Reset highlighted angles
+            highlightedAngles.Clear();
+
+
+            //
             toolStripStatusLabel1.Text = "Ready for new measurements";
             pictureBox1.Invalidate();
         }
@@ -405,7 +520,7 @@ namespace kinectProject
         }
 
         // Helper classes
-        private enum MeasurementType { Distance, AngleSegment1, AngleSegment2 }
+        private enum MeasurementType { Distance, AngleSegment1, AngleSegment2, AngleWithPlan }
 
         private struct Measurement
         {
@@ -437,92 +552,59 @@ namespace kinectProject
 
         private void BodyPictureAnalyzer_Load(object sender, EventArgs e)
         {
-            _kinectSensor = KinectSensor.GetDefault();
-            _coordinateMapper = _kinectSensor.CoordinateMapper;
-            _reader = _kinectSensor.OpenMultiSourceFrameReader(FrameSourceTypes.Color);
-            _reader.MultiSourceFrameArrived += Reader_MultiSourceFrameArrived;
-            _kinectSensor.Open();
+            
         }
 
         private void panelTop_Paint(object sender, PaintEventArgs e)
         {
 
         }
-    
-        private void Reader_MultiSourceFrameArrived(object sender, MultiSourceFrameArrivedEventArgs e)
+
+
+
+        private void btnTogglePlan_Click(object sender, EventArgs e)
         {
-            if (!_takingPhoto) return;
+            showPlan = !showPlan;
+            pictureBox1.Invalidate(); // Refresh image
+        }
 
-            var frameReference = e.FrameReference.AcquireFrame();
 
-            using (var colorFrame = frameReference.ColorFrameReference.AcquireFrame())
+        private bool angleWithPlanMode = false;
+
+        private void btnAngleWithPlan_Click(object sender, EventArgs e)
+        {
+            currentMode = MeasurementMode.Distance; // we draw a single line
+            angleWithPlanMode = !angleWithPlanMode;
+            toolStripStatusLabel1.Text = "Draw a line, then select axis (X or Y)";
+        }
+
+        private void DrawAngleHighlight(Graphics g, Point vertex, double refAngle, double lineAngle)
+        {
+            // Compute start and sweep angles (degrees)
+            float startAngle = (float)(Math.Min(refAngle, lineAngle) * 180 / Math.PI);
+            float sweepAngle = (float)(Math.Abs(lineAngle - refAngle) * 180 / Math.PI);
+
+            // Draw semi-transparent arc
+            using (Brush semiBrush = new SolidBrush(Color.FromArgb(80, Color.LightBlue)))
             {
-                if (colorFrame != null)
-                {
-                    FrameDescription desc = colorFrame.FrameDescription;
-                    byte[] pixels = new byte[desc.Width * desc.Height * 4];
-                    colorFrame.CopyConvertedFrameDataToArray(pixels, ColorImageFormat.Bgra);
-
-                    Bitmap bitmap = new Bitmap(desc.Width, desc.Height, PixelFormat.Format32bppArgb);
-                    BitmapData bmpData = bitmap.LockBits(
-                        new Rectangle(0, 0, bitmap.Width, bitmap.Height),
-                        ImageLockMode.WriteOnly,
-                        bitmap.PixelFormat);
-                    Marshal.Copy(pixels, 0, bmpData.Scan0, pixels.Length);
-                    bitmap.UnlockBits(bmpData);
-
-                    using (Graphics g = Graphics.FromImage(bitmap))
-                    {
-                        int rectWidth = 500;
-                        int rectHeight = 1000;
-                        int centerX = bitmap.Width / 2 - rectWidth / 2;
-                        int centerY = bitmap.Height / 2 - rectHeight / 2 ;
-                        Color rectColor = Color.LightGreen; // Change to green later if needed
-
-                        g.DrawRectangle(new Pen(rectColor, 5), centerX, centerY, rectWidth, rectHeight);
-                    }
-
-                    _latestBitmap = (Bitmap)bitmap.Clone();
-                    pictureBox1.Image = _latestBitmap;
-                    bitmap.Dispose();
-                }
+                float radius = 50; // size of the arc highlight
+                g.FillPie(semiBrush,
+                    vertex.X - radius,
+                    vertex.Y - radius,
+                    radius * 2,
+                    radius * 2,
+                    startAngle,
+                    sweepAngle);
             }
         }
 
-        private void btnTakePhoto_Click(object sender, EventArgs e)
+        private enum AxisType
         {
-            _takingPhoto = true;
-            btnTakePhoto.Enabled = false;
-            btnDone.Visible = true;
-            btnDone.Enabled = true;
-            
+            X,
+            Y
         }
 
-        private void btnDone_Click(object sender, EventArgs e)
-        {
-            _takingPhoto = false;
-            btnTakePhoto.Enabled = true;
-            btnDone.Visible = false;
-            btnDone.Enabled = false;
-
-            if (_latestBitmap != null)
-            {
-                string path = Path.Combine(Application.StartupPath, "CapturedImage_" + DateTime.Now.Ticks + ".png");
-                _latestBitmap.Save(path, ImageFormat.Png);
-                
-
-                MessageBox.Show("Photo enregistrée : " + path);
-
-             //   DetectCobbAngleFromStickers(_latestBitmap);
-                // Tu peux l'importer ici dans ton PictureBox d’analyse
-               // pictureBox1.Image = Image.FromFile(path); // remplace par ton PictureBox
-            }
-        }
-
-        // Ajoute ce using en haut si manquant
-
-
-private void DetectCobbAngleFromStickers(Bitmap bitmap)
+        private void DetectCobbAngleFromStickers(Bitmap bitmap)
     {
         if (bitmap == null)
         {
@@ -605,7 +687,37 @@ private void DetectCobbAngleFromStickers(Bitmap bitmap)
         pictureBox1.Image = (Bitmap)bitmap.Clone(); // rafraîchir l’image avec lignes
     }
 
+        private double CalculateAngleWithPlan(Point p1, Point p2, bool useXAxis)
+        {
+            // Convert line into vector
+            double dx = p2.X - p1.X;
+            double dy = p2.Y - p1.Y;
+
+            // Axis vector based on draggable plan
+            double ax, ay;
+            if (useXAxis)
+            {
+                ax = 1;
+                ay = 0;
+            }
+            else
+            {
+                ax = 0;
+                ay = 1;
+            }
+
+            // Dot product and magnitudes
+            double dot = dx * ax + dy * ay;
+            double mag1 = Math.Sqrt(dx * dx + dy * dy);
+            double mag2 = Math.Sqrt(ax * ax + ay * ay);
+
+            if (mag1 == 0 || mag2 == 0)
+                return 0;
+
+            double cosTheta = Math.Max(-1, Math.Min(1, dot / (mag1 * mag2)));
+            return Math.Acos(cosTheta) * (180.0 / Math.PI);
+        }
 
 
-}
+    }
 }

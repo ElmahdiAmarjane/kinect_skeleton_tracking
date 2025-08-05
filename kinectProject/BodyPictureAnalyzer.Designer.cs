@@ -16,6 +16,8 @@
         private System.Windows.Forms.Button btnCalculate;
         private System.Windows.Forms.Panel panelTop;
         private System.Windows.Forms.Button btnSetReferenceScale;
+        private System.Windows.Forms.Button btnShowPlan;
+        private System.Windows.Forms.Button btnAnglePlanMode;
 
         private System.Windows.Forms.Button btnTakePhoto;
         private System.Windows.Forms.Button btnDone;
@@ -44,6 +46,8 @@
             this.btnClear = new System.Windows.Forms.Button();
             this.lblMode = new System.Windows.Forms.Label();
             this.btnSetReferenceScale = new System.Windows.Forms.Button();
+            this.btnShowPlan = new System.Windows.Forms.Button();
+            this.btnAnglePlanMode = new System.Windows.Forms.Button();
             ((System.ComponentModel.ISupportInitialize)(this.pictureBox1)).BeginInit();
             this.panelMeasurements.SuspendLayout();
             this.statusStrip1.SuspendLayout();
@@ -57,12 +61,15 @@
             this.pictureBox1.Dock = System.Windows.Forms.DockStyle.Fill;
             this.pictureBox1.Location = new System.Drawing.Point(0, 60);
             this.pictureBox1.Name = "pictureBox1";
-            this.pictureBox1.Size = new System.Drawing.Size(800, 480);
+            this.pictureBox1.Size = new System.Drawing.Size(918, 480);
             this.pictureBox1.SizeMode = System.Windows.Forms.PictureBoxSizeMode.Zoom;
             this.pictureBox1.TabIndex = 0;
             this.pictureBox1.TabStop = false;
             this.pictureBox1.Paint += new System.Windows.Forms.PaintEventHandler(this.pictureBox1_Paint);
             this.pictureBox1.MouseClick += new System.Windows.Forms.MouseEventHandler(this.pictureBox1_MouseClick);
+            this.pictureBox1.MouseDown += new System.Windows.Forms.MouseEventHandler(this.pictureBox1_MouseDown);
+            this.pictureBox1.MouseMove += new System.Windows.Forms.MouseEventHandler(this.pictureBox1_MouseMove);
+            this.pictureBox1.MouseUp += new System.Windows.Forms.MouseEventHandler(this.pictureBox1_MouseUp);
             // 
             // panelMeasurements
             // 
@@ -70,7 +77,7 @@
             this.panelMeasurements.Dock = System.Windows.Forms.DockStyle.Bottom;
             this.panelMeasurements.Location = new System.Drawing.Point(0, 540);
             this.panelMeasurements.Name = "panelMeasurements";
-            this.panelMeasurements.Size = new System.Drawing.Size(800, 100);
+            this.panelMeasurements.Size = new System.Drawing.Size(918, 100);
             this.panelMeasurements.TabIndex = 1;
             // 
             // lstMeasurements
@@ -84,7 +91,7 @@
             this.lstMeasurements.Location = new System.Drawing.Point(0, 0);
             this.lstMeasurements.Name = "lstMeasurements";
             this.lstMeasurements.ScrollAlwaysVisible = true;
-            this.lstMeasurements.Size = new System.Drawing.Size(800, 100);
+            this.lstMeasurements.Size = new System.Drawing.Size(918, 100);
             this.lstMeasurements.TabIndex = 0;
             // 
             // statusStrip1
@@ -94,7 +101,7 @@
             this.toolStripStatusLabel1});
             this.statusStrip1.Location = new System.Drawing.Point(0, 640);
             this.statusStrip1.Name = "statusStrip1";
-            this.statusStrip1.Size = new System.Drawing.Size(800, 22);
+            this.statusStrip1.Size = new System.Drawing.Size(918, 22);
             this.statusStrip1.TabIndex = 2;
             this.statusStrip1.Text = "statusStrip1";
             // 
@@ -115,7 +122,7 @@
             this.panelTop.Dock = System.Windows.Forms.DockStyle.Top;
             this.panelTop.Location = new System.Drawing.Point(0, 0);
             this.panelTop.Name = "panelTop";
-            this.panelTop.Size = new System.Drawing.Size(800, 60);
+            this.panelTop.Size = new System.Drawing.Size(918, 60);
             this.panelTop.TabIndex = 3;
             this.panelTop.Paint += new System.Windows.Forms.PaintEventHandler(this.panelTop_Paint);
             // 
@@ -128,7 +135,7 @@
             this.btnImport.ForeColor = System.Drawing.Color.White;
             this.btnImport.Location = new System.Drawing.Point(0, 0);
             this.btnImport.Name = "btnImport";
-            this.btnImport.Size = new System.Drawing.Size(800, 30);
+            this.btnImport.Size = new System.Drawing.Size(918, 30);
             this.btnImport.TabIndex = 0;
             this.btnImport.Text = "IMPORT BODY PICTURE";
             this.btnImport.UseVisualStyleBackColor = false;
@@ -182,7 +189,7 @@
             this.lblMode.AutoSize = true;
             this.lblMode.Font = new System.Drawing.Font("Segoe UI", 8.25F, System.Drawing.FontStyle.Bold);
             this.lblMode.ForeColor = System.Drawing.Color.White;
-            this.lblMode.Location = new System.Drawing.Point(600, 40);
+            this.lblMode.Location = new System.Drawing.Point(718, 40);
             this.lblMode.Name = "lblMode";
             this.lblMode.Size = new System.Drawing.Size(88, 13);
             this.lblMode.TabIndex = 4;
@@ -190,57 +197,57 @@
             // 
             // btnSetReferenceScale
             // 
-            this.btnSetReferenceScale.BackColor = System.Drawing.Color.FromArgb(64, 64, 64); // Dark gray
+            this.btnSetReferenceScale.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(64)))), ((int)(((byte)(64)))), ((int)(((byte)(64)))));
             this.btnSetReferenceScale.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
             this.btnSetReferenceScale.Font = new System.Drawing.Font("Segoe UI", 8.25F);
             this.btnSetReferenceScale.ForeColor = System.Drawing.Color.White;
-            this.btnSetReferenceScale.Location = new System.Drawing.Point(400, 35); // Adjust to avoid overlap
+            this.btnSetReferenceScale.Location = new System.Drawing.Point(400, 35);
             this.btnSetReferenceScale.Name = "btnSetReferenceScale";
             this.btnSetReferenceScale.Size = new System.Drawing.Size(160, 25);
             this.btnSetReferenceScale.TabIndex = 4;
             this.btnSetReferenceScale.Text = "SET REFERENCE SCALE";
             this.btnSetReferenceScale.UseVisualStyleBackColor = false;
             this.btnSetReferenceScale.Click += new System.EventHandler(this.btnSetReferenceScale_Click);
-            //
-            // btnTakePhoto
-            this.btnTakePhoto = new System.Windows.Forms.Button();
-            this.btnTakePhoto.BackColor = System.Drawing.Color.FromArgb(0, 123, 255);
-            this.btnTakePhoto.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
-            this.btnTakePhoto.Font = new System.Drawing.Font("Segoe UI", 8.25F);
-            this.btnTakePhoto.ForeColor = System.Drawing.Color.White;
-            this.btnTakePhoto.Location = new System.Drawing.Point(570, 35);
-            this.btnTakePhoto.Name = "btnTakePhoto";
-            this.btnTakePhoto.Size = new System.Drawing.Size(100, 25);
-            this.btnTakePhoto.TabIndex = 5;
-            this.btnTakePhoto.Text = "TAKE PHOTO";
-            this.btnTakePhoto.UseVisualStyleBackColor = false;
-            this.btnTakePhoto.Click += new System.EventHandler(this.btnTakePhoto_Click);
-            this.panelTop.Controls.Add(this.btnTakePhoto);
-
-            // btnDone (hidden initially)
-            this.btnDone = new System.Windows.Forms.Button();
-            this.btnDone.BackColor = System.Drawing.Color.SeaGreen;
-            this.btnDone.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
-            this.btnDone.Font = new System.Drawing.Font("Segoe UI", 8.25F);
-            this.btnDone.ForeColor = System.Drawing.Color.White;
-            this.btnDone.Location = new System.Drawing.Point(680, 35);
-            this.btnDone.Name = "btnDone";
-            this.btnDone.Size = new System.Drawing.Size(100, 25);
-            this.btnDone.TabIndex = 6;
-            this.btnDone.Text = "DONE";
-            this.btnDone.Visible = false;
-            this.btnDone.Click += new System.EventHandler(this.btnDone_Click);
-            this.panelTop.Controls.Add(this.btnDone);
-
-
+            // 
+            // btnShowPlan
+            // 
+            this.btnShowPlan.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(64)))), ((int)(((byte)(200)))), ((int)(((byte)(64)))));
+            this.btnShowPlan.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
+            this.btnShowPlan.Font = new System.Drawing.Font("Segoe UI", 8.25F);
+            this.btnShowPlan.ForeColor = System.Drawing.Color.White;
+            this.btnShowPlan.Location = new System.Drawing.Point(570, 35);
+            this.btnShowPlan.Name = "btnShowPlan";
+            this.btnShowPlan.Size = new System.Drawing.Size(160, 25);
+            this.btnShowPlan.TabIndex = 5;
+            this.btnShowPlan.Text = "Show/Hide plan";
+            this.btnShowPlan.UseVisualStyleBackColor = false;
+            this.btnShowPlan.Click += new System.EventHandler(this.btnTogglePlan_Click);
+            // 
+            // btnAnglePlanMode
+            // 
+            this.btnAnglePlanMode.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(64)))), ((int)(((byte)(100)))), ((int)(((byte)(122)))));
+            this.btnAnglePlanMode.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
+            this.btnAnglePlanMode.Font = new System.Drawing.Font("Segoe UI", 8.25F);
+            this.btnAnglePlanMode.ForeColor = System.Drawing.Color.White;
+            this.btnAnglePlanMode.Location = new System.Drawing.Point(740, 35);
+            this.btnAnglePlanMode.Name = "btnAnglePlanMode";
+            this.btnAnglePlanMode.Size = new System.Drawing.Size(120, 25);
+            this.btnAnglePlanMode.TabIndex = 6;
+            this.btnAnglePlanMode.Text = "Angle PLan mode";
+            this.btnAnglePlanMode.UseVisualStyleBackColor = false;
+            this.btnAnglePlanMode.Click += new System.EventHandler(this.btnAngleWithPlan_Click);
+           
+            
             // 
             // BodyPictureAnalyzer
             // 
             this.AutoScaleDimensions = new System.Drawing.SizeF(6F, 13F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
             this.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(60)))), ((int)(((byte)(60)))), ((int)(((byte)(60)))));
-            this.ClientSize = new System.Drawing.Size(800, 662);
+            this.ClientSize = new System.Drawing.Size(918, 662);
             this.Controls.Add(this.btnSetReferenceScale);
+            this.Controls.Add(this.btnShowPlan);
+            this.Controls.Add(this.btnAnglePlanMode);
             this.Controls.Add(this.pictureBox1);
             this.Controls.Add(this.panelMeasurements);
             this.Controls.Add(this.panelTop);
