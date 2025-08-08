@@ -18,6 +18,7 @@
         private System.Windows.Forms.Button btnSetReferenceScale;
         private System.Windows.Forms.Button btnShowPlan;
         private System.Windows.Forms.Button btnAnglePlanMode;
+        private System.Windows.Forms.Button btnDeleteMode;
 
         private System.Windows.Forms.Button btnTakePhoto;
         private System.Windows.Forms.Button btnDone;
@@ -48,6 +49,7 @@
             this.btnSetReferenceScale = new System.Windows.Forms.Button();
             this.btnShowPlan = new System.Windows.Forms.Button();
             this.btnAnglePlanMode = new System.Windows.Forms.Button();
+            this.btnDeleteMode = new System.Windows.Forms.Button();
             ((System.ComponentModel.ISupportInitialize)(this.pictureBox1)).BeginInit();
             this.panelMeasurements.SuspendLayout();
             this.statusStrip1.SuspendLayout();
@@ -236,8 +238,21 @@
             this.btnAnglePlanMode.Text = "Angle PLan mode";
             this.btnAnglePlanMode.UseVisualStyleBackColor = false;
             this.btnAnglePlanMode.Click += new System.EventHandler(this.btnAngleWithPlan_Click);
-           
-            
+            // 
+            // btnDeleteMode
+            // 
+            this.btnDeleteMode.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(64)))), ((int)(((byte)(10)))), ((int)(((byte)(122)))));
+            this.btnDeleteMode.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
+            this.btnDeleteMode.Font = new System.Drawing.Font("Segoe UI", 8.25F);
+            this.btnDeleteMode.ForeColor = System.Drawing.Color.White;
+            this.btnDeleteMode.Location = new System.Drawing.Point(870, 35);
+            this.btnDeleteMode.Name = "btnDeleteMode";
+            this.btnDeleteMode.Size = new System.Drawing.Size(100, 25);
+            this.btnDeleteMode.TabIndex = 7;
+            this.btnDeleteMode.Text = "Delete";
+            this.btnDeleteMode.UseVisualStyleBackColor = false;
+            this.btnDeleteMode.Click += new System.EventHandler(this.btnDeleteMode_Click);
+
             // 
             // BodyPictureAnalyzer
             // 
@@ -248,6 +263,7 @@
             this.Controls.Add(this.btnSetReferenceScale);
             this.Controls.Add(this.btnShowPlan);
             this.Controls.Add(this.btnAnglePlanMode);
+            this.Controls.Add(this.btnDeleteMode);
             this.Controls.Add(this.pictureBox1);
             this.Controls.Add(this.panelMeasurements);
             this.Controls.Add(this.panelTop);

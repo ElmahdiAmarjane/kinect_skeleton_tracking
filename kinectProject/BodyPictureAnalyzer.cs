@@ -40,6 +40,11 @@ namespace kinectProject
 
         private List<(Point vertex, double refAngle, double lineAngle, AxisType axis)> highlightedAngles
     = new List<(Point vertex, double refAngle, double lineAngle, AxisType axis)>();
+        //
+
+        private bool deleteMode = false;
+        private const int lineClickThreshold = 5; // Sensitivity in pixels for selecting a line
+
 
         public BodyPictureAnalyzer()
         {
@@ -159,6 +164,40 @@ namespace kinectProject
         private void pictureBox1_MouseClick(object sender, MouseEventArgs e)
         {
             if (e.Button != MouseButtons.Left || pictureBox1.Image == null) return;
+
+           
+
+            // ✅ Delete mode
+            if (deleteMode)
+            {
+                int indexToRemove = FindMeasurementAtPoint(e.Location);
+                if (indexToRemove >= 0)
+                {
+                    string targetName = measurements[indexToRemove].Name;
+                    measurements.RemoveAt(indexToRemove);
+
+                    // 🧠 Find and remove from ListBox by name
+                    for (int i = 0; i < lstMeasurements.Items.Count; i++)
+                    {
+                        if (lstMeasurements.Items[i].ToString().StartsWith(targetName))
+                        {
+                            lstMeasurements.Items.RemoveAt(i);
+                            break;
+                        }
+                    }
+
+                    // 🧠 Also remove from highlight if needed
+                    int highlightIndex = FindHighlightedAngleAtPoint(e.Location);
+                    if (highlightIndex >= 0)
+                    {
+                        highlightedAngles.RemoveAt(highlightIndex);
+                    }
+
+                    pictureBox1.Invalidate();
+                }
+
+                return;
+            }
 
             // ✅ 1) If clicking on the plan center, ignore normal measurement click
             double dist = Math.Sqrt(Math.Pow(e.X - planCenter.X, 2) + Math.Pow(e.Y - planCenter.Y, 2));
@@ -603,6 +642,53 @@ namespace kinectProject
             X,
             Y
         }
+
+        private void btnDeleteMode_Click(object sender, EventArgs e)
+        {
+            deleteMode = !deleteMode;
+            btnDeleteMode.Text = deleteMode ? "Delete: ON" : "Delete: OFF";
+            Cursor = deleteMode ? Cursors.Cross : Cursors.Default;
+        }
+
+        private int FindMeasurementAtPoint(Point clickPoint)
+        {
+            for (int i = 0; i < measurements.Count; i++)
+            {
+                if (IsPointNearLine(clickPoint, measurements[i].Start, measurements[i].End))
+                    return i;
+            }
+            return -1;
+        }
+
+        private int FindHighlightedAngleAtPoint(Point clickPoint)
+        {
+            for (int i = 0; i < highlightedAngles.Count; i++)
+            {
+                Point vertex = highlightedAngles[i].vertex;
+                if (Math.Sqrt(Math.Pow(clickPoint.X - vertex.X, 2) + Math.Pow(clickPoint.Y - vertex.Y, 2)) <= 8)
+                    return i;
+            }
+            return -1;
+        }
+
+        private bool IsPointNearLine(Point p, Point a, Point b)
+        {
+            double dx = b.X - a.X;
+            double dy = b.Y - a.Y;
+
+            if (dx == 0 && dy == 0)
+                return Math.Sqrt(Math.Pow(p.X - a.X, 2) + Math.Pow(p.Y - a.Y, 2)) < lineClickThreshold;
+
+            double t = ((p.X - a.X) * dx + (p.Y - a.Y) * dy) / (dx * dx + dy * dy);
+            t = Math.Max(0, Math.Min(1, t));
+
+            double projX = a.X + t * dx;
+            double projY = a.Y + t * dy;
+
+            double distance = Math.Sqrt(Math.Pow(p.X - projX, 2) + Math.Pow(p.Y - projY, 2));
+            return distance <= lineClickThreshold;
+        }
+
 
         private void DetectCobbAngleFromStickers(Bitmap bitmap)
     {
