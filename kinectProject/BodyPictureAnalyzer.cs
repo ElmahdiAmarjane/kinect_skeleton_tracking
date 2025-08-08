@@ -12,7 +12,7 @@ namespace kinectProject
 {
     public partial class BodyPictureAnalyzer : Form
     {
-        private enum MeasurementMode { Distance, Angle }
+        private enum MeasurementMode { Distance, Angle , OnePoint }
         private MeasurementMode currentMode = MeasurementMode.Distance;
 
         private List<Measurement> measurements = new List<Measurement>();
@@ -198,6 +198,20 @@ namespace kinectProject
 
                 return;
             }
+            // ✅ DRAW POINT MODE
+            if (currentMode == MeasurementMode.OnePoint)
+            {
+                measurements.Add(new Measurement(
+                    e.Location,
+                    e.Location, // same start/end
+                    $"P{measurementCounter++}",
+                    MeasurementType.OnePoint));
+
+                lstMeasurements.Items.Add($"Point at ({e.X}, {e.Y})");
+                pictureBox1.Invalidate();
+                return;
+            }
+
 
             // ✅ 1) If clicking on the plan center, ignore normal measurement click
             double dist = Math.Sqrt(Math.Pow(e.X - planCenter.X, 2) + Math.Pow(e.Y - planCenter.Y, 2));
@@ -439,7 +453,20 @@ namespace kinectProject
 
                 // Calculate midpoint for label
                 Point midPoint = new Point((m.Start.X + m.End.X) / 2, (m.Start.Y + m.End.Y) / 2);
+                if (m.Type == MeasurementType.OnePoint)
+                {
+                    // Draw just one point in blue
+                    e.Graphics.FillEllipse(Brushes.Blue, m.Start.X - 4, m.Start.Y - 4, 8, 8);
 
+                    // Label next to it
+                    using (var font = new Font("Segoe UI", 9))
+                    using (var textBrush = new SolidBrush(Color.White))
+                    {
+                        e.Graphics.DrawString(m.Name, font, textBrush, m.Start.X + 8, m.Start.Y - 8);
+                    }
+
+                    continue; // Skip line/angle drawing
+                }
                 // Prepare measurement text
                 string measurementText = m.Name;
                 if (m.Type == MeasurementType.Distance)
@@ -488,6 +515,7 @@ namespace kinectProject
                 }
 
             }
+          
             // Draw current measurement in progress
             if (currentStartPoint != null)
             {
@@ -559,7 +587,7 @@ namespace kinectProject
         }
 
         // Helper classes
-        private enum MeasurementType { Distance, AngleSegment1, AngleSegment2, AngleWithPlan }
+        private enum MeasurementType { Distance, AngleSegment1, AngleSegment2, AngleWithPlan , OnePoint }
 
         private struct Measurement
         {
@@ -615,6 +643,12 @@ namespace kinectProject
             currentMode = MeasurementMode.Distance; // we draw a single line
             angleWithPlanMode = !angleWithPlanMode;
             toolStripStatusLabel1.Text = "Draw a line, then select axis (X or Y)";
+        }
+        private void btnOnePointMode_Click(object sender, EventArgs e)
+        {
+            currentMode = MeasurementMode.OnePoint; // we draw a single line
+           
+            toolStripStatusLabel1.Text = "Draw a point ";
         }
 
         private void DrawAngleHighlight(Graphics g, Point vertex, double refAngle, double lineAngle)
