@@ -470,6 +470,7 @@ namespace KinectProject
             using (var depthFrame = multiSourceFrame.DepthFrameReference.AcquireFrame())
             using (var bodyFrame = multiSourceFrame.BodyFrameReference.AcquireFrame())
             {
+
                 if (depthFrame != null && bodyFrame != null)
                 {
 
@@ -547,31 +548,6 @@ namespace KinectProject
                 DrawSpineOnBitmap(trackedBody);
 
 
-                // ***************************************
-                // Get selected joints from ComboBox
-                //string jointName1 = jointSelector1.SelectedItem.ToString();
-                //string jointName2 = jointSelector2.SelectedItem.ToString();
-
-                //// Convert selected joint names to JointType enum
-                //JointType jointType1 = (JointType)Enum.Parse(typeof(JointType), jointName1);
-                //JointType jointType2 = (JointType)Enum.Parse(typeof(JointType), jointName2);
-
-                //// Get depth values of the selected joints
-                //CameraSpacePoint position1 = trackedBody.Joints[jointType1].Position;
-                //CameraSpacePoint position2 = trackedBody.Joints[jointType2].Position;
-
-                //// Convert to millimeters
-                //ushort depth1 = (ushort)(position1.Z * 1000);
-                //ushort depth2 = (ushort)(position2.Z * 1000);
-
-                //// Calculate depth difference
-                //int depthDifference = Math.Abs(depth1 - depth2);
-
-                //// Update the label
-                //depthDiffLabel.Text = $"{jointName1}-{jointName2} Depth Diff: {depthDifference} mm";
-
-                // ***************************************
-
 
                 // Get spine base position for reference depth
                 CameraSpacePoint spineBase = trackedBody.Joints[JointType.SpineMid].Position;
@@ -598,35 +574,18 @@ namespace KinectProject
                         return;
                     }
 
-                    // Enhanced sensitivity mapping
+                  
                     if (depth >= minDepth && depth <= maxDepth && trackedBody != null)
                     {
-                        // Normalize depth within the body-specific window
+                        // Map depth to hue directly for high sensitivity
                         double normalizedDepth = (depth - minDepth) / (double)(maxDepth - minDepth);
+                        normalizedDepth = Math.Max(0.0, Math.Min(1.0, normalizedDepth)); // clamp 0-1
 
-                        // Use red for closest parts (chest) to blue for furthest (stomach)
-                        if (normalizedDepth < 0.33)
-                        {
-                            // Red to Yellow
-                            byte r = 255;
-                            byte g = (byte)(normalizedDepth * 3 * 255);
-                            SetPixelColor(i, r, g, 0);
-                        }
-                        else if (normalizedDepth < 0.66)
-                        {
-                            // Yellow to Green
-                            byte r = (byte)((0.66 - normalizedDepth) * 3 * 255);
-                            byte g = 255;
-                            SetPixelColor(i, r, g, 0);
-                        }
-                        else
-                        {
-                            // Green to Blue
-                            byte g = (byte)((1 - normalizedDepth) * 3 * 255);
-                            byte b = (byte)(normalizedDepth * 255);
-                            SetPixelColor(i, 0, g, b);
-                        }
+                        // Full hue spectrum mapping
+                        Color color = HsvToRgb(normalizedDepth * 360.0, 1.0, 1.0);
+                        SetPixelColor(i, color.R, color.G, color.B);
                     }
+
                     else
                     {
                         // Grey for detected but out of focus range
@@ -674,6 +633,27 @@ namespace KinectProject
             if (pictureBox != null)
             {
                 pictureBox.Image = depthBitmap;
+            }
+        }
+
+        private Color HsvToRgb(double h, double s, double v)
+        {
+            int hi = Convert.ToInt32(Math.Floor(h / 60)) % 6;
+            double f = h / 60 - Math.Floor(h / 60);
+
+            v = v * 255;
+            byte p = (byte)(v * (1 - s));
+            byte q = (byte)(v * (1 - f * s));
+            byte t = (byte)(v * (1 - (1 - f) * s));
+
+            switch (hi)
+            {
+                case 0: return Color.FromArgb((byte)v, t, p);
+                case 1: return Color.FromArgb(q, (byte)v, p);
+                case 2: return Color.FromArgb(p, (byte)v, t);
+                case 3: return Color.FromArgb(p, q, (byte)v);
+                case 4: return Color.FromArgb(t, p, (byte)v);
+                default: return Color.FromArgb((byte)v, p, q);
             }
         }
 
@@ -1014,6 +994,56 @@ namespace KinectProject
 
 
 
+        private List<System.Drawing.PointF> FilterDepthPoints(List<System.Drawing.PointF> points)
+        {
+            List<System.Drawing.PointF> filtered = new List<System.Drawing.PointF>();
+            for (int i = 1; i < points.Count - 1; i++)
+            {
+                float x = (points[i - 1].X + points[i].X + points[i + 1].X) / 3f;
+                float y = points[i].Y; // garde Y intact
+                filtered.Add(new System.Drawing.PointF(x, y));
+            }
+            return filtered;
+        }
+
+        //13/07
+        List<System.Drawing.PointF> GaussianSmooth(List<System.Drawing.PointF> raw, int radius = 3, double sigma = 1.0)
+        {
+            int len = raw.Count;
+            var smoothed = new List<System.Drawing.PointF>(len);
+
+            // Build Gaussian kernel
+            var kernel = new double[2 * radius + 1];
+            double sum = 0;
+            for (int i = -radius; i <= radius; i++)
+            {
+                double v = Math.Exp(-0.5 * (i * i) / (sigma * sigma));
+                kernel[i + radius] = v;
+                sum += v;
+            }
+            for (int i = 0; i < kernel.Length; i++)
+                kernel[i] /= sum;
+
+            // Convolve
+            for (int i = 0; i < len; i++)
+            {
+                double accum = 0;
+                double weight = 0;
+                for (int k = -radius; k <= radius; k++)
+                {
+                    int idx = i + k;
+                    if (idx < 0 || idx >= len) continue;
+                    accum += raw[idx].X * kernel[k + radius];
+                    weight += kernel[k + radius];
+                }
+                // Keep original Y
+                smoothed.Add(new System.Drawing.PointF((float)(accum / weight), raw[i].Y));
+            }
+            return smoothed;
+        }
+
+
+
         private void SideBox_MouseMove(object sender, MouseEventArgs e)
         {
             if (lastSmoothedSpinePoints == null || lastSmoothedSpinePoints.Count == 0)
@@ -1114,57 +1144,7 @@ namespace KinectProject
         }
 
 
-        private List<System.Drawing.PointF> FilterDepthPoints(List<System.Drawing.PointF> points)
-        {
-            List<System.Drawing.PointF> filtered = new List<System.Drawing.PointF>();
-            for (int i = 1; i < points.Count - 1; i++)
-            {
-                float x = (points[i - 1].X + points[i].X + points[i + 1].X) / 3f;
-                float y = points[i].Y; // garde Y intact
-                filtered.Add(new System.Drawing.PointF(x, y));
-            }
-            return filtered;
-        }
-
-
    
-
-        //13/07
-        List<System.Drawing.PointF> GaussianSmooth(List<System.Drawing.PointF> raw, int radius = 3, double sigma = 1.0)
-        {
-            int len = raw.Count;
-            var smoothed = new List<System.Drawing.PointF>(len);
-
-            // Build Gaussian kernel
-            var kernel = new double[2 * radius + 1];
-            double sum = 0;
-            for (int i = -radius; i <= radius; i++)
-            {
-                double v = Math.Exp(-0.5 * (i * i) / (sigma * sigma));
-                kernel[i + radius] = v;
-                sum += v;
-            }
-            for (int i = 0; i < kernel.Length; i++)
-                kernel[i] /= sum;
-
-            // Convolve
-            for (int i = 0; i < len; i++)
-            {
-                double accum = 0;
-                double weight = 0;
-                for (int k = -radius; k <= radius; k++)
-                {
-                    int idx = i + k;
-                    if (idx < 0 || idx >= len) continue;
-                    accum += raw[idx].X * kernel[k + radius];
-                    weight += kernel[k + radius];
-                }
-                // Keep original Y
-                smoothed.Add(new System.Drawing.PointF((float)(accum / weight), raw[i].Y));
-            }
-            return smoothed;
-        }
-
 
         /////////////::
         private void ExportCurveBtn_Click(object sender, EventArgs e)
@@ -1520,10 +1500,12 @@ private void BtnOpenBodyAnalyzer_Click(object sender, EventArgs e)
 
             // Or if you want it modal (block main window until closed), use:
             // bodyAnalyzerForm.ShowDialog();
+
+
         }
 
 
-   
+
 
         private Bitmap DrawROI(Bitmap image, PictureBox box)
         {
