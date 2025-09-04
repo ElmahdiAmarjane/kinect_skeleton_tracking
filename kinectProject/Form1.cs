@@ -74,16 +74,6 @@ namespace KinectProject
         private float manualZRef = -1; // to store manually set Z reference
 
 
-        ///////////////
-        /// <summary>
-        /// 
-        /// </summary>
-        ComboBox jointSelector1 = new ComboBox();
-        ComboBox jointSelector2 = new ComboBox();
-        Label depthDiffLabel = new Label();
-        /////////////////////
-        ///
-
 
         //
         // Horizontal and vertical detection area (in pixels, Kinect depth frame = 512x424)
@@ -96,7 +86,15 @@ namespace KinectProject
         //
         private Bitmap colorBitmap;
         private byte[] colorPixels;
-  
+       
+
+        // Ajoutez en haut avec les autres constantes
+        private const int EROSION_KERNEL_SIZE = 2;
+        private const int DILATION_KERNEL_SIZE = 3;
+        private const int MIN_BLOB_SIZE = 500;
+        private Bitmap _displayBuffer;
+        private readonly object _bufferLock = new object();
+       
 
 
         public Form1()
@@ -121,8 +119,7 @@ namespace KinectProject
                 }
 
                 kinectSensor.Open();
-               // kinectSensor.IsAvailableChanged -= KinectSensor_IsAvailableChanged;
-                //kinectSensor.IsAvailableChanged += KinectSensor_IsAvailableChanged;
+              
                 coordinateMapper = kinectSensor.CoordinateMapper;
 
                 multiSourceFrameReader = kinectSensor.OpenMultiSourceFrameReader(FrameSourceTypes.Depth | FrameSourceTypes.Body | FrameSourceTypes.Color);
@@ -155,7 +152,7 @@ namespace KinectProject
                     Width = 400,  // ✅ set a fixed width (for example 400px)
 
                     Dock = DockStyle.Right,  // ✅ align it to the left, don't fill everything
-                    BackColor = Color.FromArgb(93, 93, 144),
+                    BackColor = Color.DarkGray,
                     BorderStyle = BorderStyle.FixedSingle,
                     SizeMode = PictureBoxSizeMode.Zoom
                 };
@@ -376,7 +373,7 @@ namespace KinectProject
                 };
                 generatePdfButton.Click += GeneratePdfButton_Click;
 
-                controlLayout.Controls.Add(generatePdfButton, 7, 0);
+                controlLayout.Controls.Add(generatePdfButton, 1, 0);
                 /////////////////////////
                 ///
                 Button btnOpenBodyAnalyzer = new Button
@@ -478,44 +475,63 @@ namespace KinectProject
                 }
             }
 
+            //// === FRAME COLOR ===
+            //using (var colorFrame = multiSourceFrame.ColorFrameReference.AcquireFrame())
+            //{
+            //    if (colorFrame != null)
+            //    {
+            //        FrameDescription desc = colorFrame.FrameDescription;
+            //        if (colorBitmap == null)
+            //            colorBitmap = new Bitmap(desc.Width, desc.Height, PixelFormat.Format32bppArgb);
+
+            //        if (colorPixels == null || colorPixels.Length != desc.Width * desc.Height * 4)
+            //            colorPixels = new byte[desc.Width * desc.Height * 4];
+
+            //        // Copier pixels
+            //        colorFrame.CopyConvertedFrameDataToArray(colorPixels, ColorImageFormat.Bgra);
+
+            //        // Copier dans le bitmap
+            //        BitmapData bmpData = colorBitmap.LockBits(
+            //            new Rectangle(0, 0, desc.Width, desc.Height),
+            //            ImageLockMode.WriteOnly,
+            //            PixelFormat.Format32bppArgb);
+            //        Marshal.Copy(colorPixels, 0, bmpData.Scan0, colorPixels.Length);
+            //        colorBitmap.UnlockBits(bmpData);
+            //        Bitmap safeBitmap = (Bitmap)colorBitmap.Clone();
+
+
+
+            //        // ✅ Mise à jour UI (sans blocage)
+            //        this.BeginInvoke((Action)(() =>
+            //        {
+            //            Bitmap cropped = CropCenter(safeBitmap, 800, 800); // crop center zone
+            //            normalPictureBox.Image?.Dispose();
+            //            normalPictureBox.Image = DrawROI(cropped, normalPictureBox);
+            //        }));
+
+
+            //    }
+            //}
+
             // === FRAME COLOR ===
             using (var colorFrame = multiSourceFrame.ColorFrameReference.AcquireFrame())
+            using (var depthFrame = multiSourceFrame.DepthFrameReference.AcquireFrame())
             {
-                if (colorFrame != null)
+                if (colorFrame != null && depthFrame != null)
                 {
-                    FrameDescription desc = colorFrame.FrameDescription;
-                    if (colorBitmap == null)
-                        colorBitmap = new Bitmap(desc.Width, desc.Height, PixelFormat.Format32bppArgb);
-
-                    if (colorPixels == null || colorPixels.Length != desc.Width * desc.Height * 4)
-                        colorPixels = new byte[desc.Width * desc.Height * 4];
-
-                    // Copier pixels
-                    colorFrame.CopyConvertedFrameDataToArray(colorPixels, ColorImageFormat.Bgra);
-
-                    // Copier dans le bitmap
-                    BitmapData bmpData = colorBitmap.LockBits(
-                        new Rectangle(0, 0, desc.Width, desc.Height),
-                        ImageLockMode.WriteOnly,
-                        PixelFormat.Format32bppArgb);
-                    Marshal.Copy(colorPixels, 0, bmpData.Scan0, colorPixels.Length);
-                    colorBitmap.UnlockBits(bmpData);
-                    Bitmap safeBitmap = (Bitmap)colorBitmap.Clone();
-
-
-
-                    // ✅ Mise à jour UI (sans blocage)
-                    this.BeginInvoke((Action)(() =>
+                    var aligned = GenerateAlignedColorImage(depthFrame, colorFrame);
+                    if (aligned != null)
                     {
-                        Bitmap cropped = CropCenter(safeBitmap, 800, 800); // crop center zone
-                        normalPictureBox.Image?.Dispose();
-                        normalPictureBox.Image = DrawROI(cropped, normalPictureBox);
-                    }));
-
-
+                        this.BeginInvoke((Action)(() =>
+                        {
+                            normalPictureBox.Image?.Dispose();
+                            normalPictureBox.Image = aligned;
+                        }));
+                    }
                 }
             }
-      
+
+
         }
 
 
@@ -1493,14 +1509,15 @@ namespace KinectProject
 private void BtnOpenBodyAnalyzer_Click(object sender, EventArgs e)
         {
             // Create an instance of the BodyPictureAnalyzer form
-            BodyPictureAnalyzer bodyAnalyzerForm = new BodyPictureAnalyzer();
+              BodyPictureAnalyzer bodyAnalyzerForm = new BodyPictureAnalyzer();
 
             // Show it as a new window (non-modal)
-            bodyAnalyzerForm.Show();
+            //   bodyAnalyzerForm.Show();
 
             // Or if you want it modal (block main window until closed), use:
-            // bodyAnalyzerForm.ShowDialog();
+             bodyAnalyzerForm.ShowDialog();
 
+          
 
         }
 
@@ -1604,6 +1621,94 @@ private void BtnOpenBodyAnalyzer_Click(object sender, EventArgs e)
         }
 
 
+
+
+
+        private Bitmap GenerateAlignedColorImage(DepthFrame depthFrame, ColorFrame colorFrame)
+        {
+            if (depthFrame == null || colorFrame == null) return null;
+
+            int depthWidth = depthFrame.FrameDescription.Width;
+            int depthHeight = depthFrame.FrameDescription.Height;
+            int colorWidth = colorFrame.FrameDescription.Width;
+            int colorHeight = colorFrame.FrameDescription.Height;
+
+            // 1. Acquisition des données
+            ushort[] depthData = new ushort[depthWidth * depthHeight];
+            depthFrame.CopyFrameDataToArray(depthData);
+
+            byte[] colorData = new byte[colorWidth * colorHeight * 4];
+            colorFrame.CopyConvertedFrameDataToArray(colorData, ColorImageFormat.Bgra);
+
+            // 2. Création de l'image finale (résolution depth pour correspondance parfaite)
+            Bitmap alignedBitmap = new Bitmap(depthWidth, depthHeight, PixelFormat.Format32bppArgb);
+            BitmapData bmpData = alignedBitmap.LockBits(
+                new Rectangle(0, 0, depthWidth, depthHeight),
+                ImageLockMode.WriteOnly,
+                alignedBitmap.PixelFormat);
+
+            byte[] alignedPixels = new byte[depthWidth * depthHeight * 4];
+
+            // 3. Mappage des coordonnées depth vers couleur
+            ColorSpacePoint[] colorPoints = new ColorSpacePoint[depthWidth * depthHeight];
+            coordinateMapper.MapDepthFrameToColorSpace(depthData, colorPoints);
+
+            // 4. Paramètres de détection du corps
+            ushort minDepth = BODY_DETECTION_MIN_DEPTH;
+            ushort maxDepth = BODY_DETECTION_MAX_DEPTH;
+
+            // 5. Traitement parallèle optimisé
+            Parallel.For(0, depthHeight, depthY =>
+            {
+                for (int depthX = 0; depthX < depthWidth; depthX++)
+                {
+                    int depthIndex = depthY * depthWidth + depthX;
+                    ushort depthValue = depthData[depthIndex];
+                    ColorSpacePoint colorPoint = colorPoints[depthIndex];
+
+                    int outputIndex = depthIndex * 4;
+
+                    // Fond gris uniforme par défaut
+                    byte b = 128, g = 128, r = 128, a = 255;
+
+                    // Vérification si le pixel appartient au corps
+                    bool isValidBodyPixel = depthValue > 0 &&
+                                          depthValue >= minDepth &&
+                                          depthValue <= maxDepth;
+
+                    if (isValidBodyPixel)
+                    {
+                        int colorX = (int)Math.Floor(colorPoint.X + 0.5);
+                        int colorY = (int)Math.Floor(colorPoint.Y + 0.5);
+
+                        // Vérification des limites de l'image couleur
+                        if (colorX >= 0 && colorX < colorWidth &&
+                            colorY >= 0 && colorY < colorHeight)
+                        {
+                            int colorIndex = (colorY * colorWidth + colorX) * 4;
+                            b = colorData[colorIndex];
+                            g = colorData[colorIndex + 1];
+                            r = colorData[colorIndex + 2];
+                            a = 255;
+                        }
+                    }
+
+                    alignedPixels[outputIndex] = b;
+                    alignedPixels[outputIndex + 1] = g;
+                    alignedPixels[outputIndex + 2] = r;
+                    alignedPixels[outputIndex + 3] = a;
+                }
+            });
+
+            Marshal.Copy(alignedPixels, 0, bmpData.Scan0, alignedPixels.Length);
+            alignedBitmap.UnlockBits(bmpData);
+
+            return alignedBitmap;
+        }
+
+
+
+   
     }
 
 

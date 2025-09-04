@@ -135,6 +135,7 @@
     <Compile Include="PdfInputForm.cs">
       <SubType>Form</SubType>
     </Compile>
+    <Compile Include="PostureAnalyzer.cs" />
     <Compile Include="Program.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <EmbeddedResource Include="BodyPictureAnalyzer.resx">
