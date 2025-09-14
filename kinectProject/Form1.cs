@@ -1,6 +1,7 @@
 ﻿
 using kinectProject;
 using Microsoft.Kinect;
+using Newtonsoft.Json; 
 using PdfSharp.Drawing;
 using PdfSharp.Drawing.Layout;
 using PdfSharp.Pdf;
@@ -14,9 +15,7 @@ using System.Numerics; // pour Vector3
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using System.Windows.Forms;
-
-using Newtonsoft.Json; 
-
+using System.Drawing.Drawing2D;
 
 namespace KinectProject
 {
@@ -95,8 +94,7 @@ namespace KinectProject
         private const int MIN_BLOB_SIZE = 500;
         private Bitmap _displayBuffer;
         private readonly object _bufferLock = new object();
-        //
-        private ToolStripStatusLabel kinectStatus;
+       //
 
 
 
@@ -112,16 +110,6 @@ namespace KinectProject
         {
             try
             {
-                kinectStatus = new ToolStripStatusLabel
-                {
-                    Text = "Kinect: Non détecté",
-                    ForeColor = Color.LightCoral,
-                    Font = new Font("Segoe UI", 9f, FontStyle.Bold),
-                    Alignment = ToolStripItemAlignment.Right
-                };
-                statusStrip.Items.Add(kinectStatus);
-
-
                 // === Initialize Kinect ===
                 kinectSensor = KinectSensor.GetDefault();
                 if (kinectSensor == null)
@@ -252,7 +240,7 @@ namespace KinectProject
                 Color analyzerColor = Color.FromArgb(30, 144, 255);   // Dodger Blue
 
                 // Helper method to create styled buttons with proper width
-                Button CreateStyledButton(string text, Color backColor, EventHandler clickHandler, int minWidth = 120)
+                Button CreateStyledButton(string text, Color backColor, EventHandler clickHandler, int minWidth = 90)
                 {
                     Button button = new Button
                     {
@@ -271,7 +259,7 @@ namespace KinectProject
                         AutoSize = true,
                         AutoSizeMode = AutoSizeMode.GrowAndShrink
                     };
-
+                    ApplyRoundedStyle(button, 8);
                     button.FlatAppearance.MouseOverBackColor = ControlPaint.Light(backColor, 0.2f);
                     button.FlatAppearance.MouseDownBackColor = ControlPaint.Dark(backColor, 0.2f);
                     button.Click += clickHandler;
@@ -280,21 +268,21 @@ namespace KinectProject
                 }
 
                 // Create and style buttons with clearer text and proper widths
-                Button btnOpenBodyAnalyzer = CreateStyledButton("📷 Analyser Image", analyzerColor, BtnOpenBodyAnalyzer_Click, 120);
-                Button generatePdfButton = CreateStyledButton("📄 Générer PDF", pdfColor, GeneratePdfButton_Click, 120);
-                Button btnSaveDepthImage = CreateStyledButton("💾 Depth Image", primaryColor, BtnSaveDepthImage_Click, 120);
-                Button btnSaveImage = CreateStyledButton("💾 Color Image", primaryColor, BtnSaveImage_Click, 120);
-                Button sagittalBtn = CreateStyledButton("📊 Capturer Courbe", secondaryColor, SagittalBtn_Click, 120);
-                Button exportBtn = CreateStyledButton("🖼️ Export PNG", accentColor, ExportCurveBtn_Click, 120);
-                Button btnExportData = CreateStyledButton("📁 Export Data", exportColor, BtnExportData_Click, 120);
-                Button btnImportData = CreateStyledButton("📂 Import Data", exportColor, BtnImportData_Click, 130);
+                Button btnOpenBodyAnalyzer = CreateStyledButton("📷 Analyser Image", analyzerColor, BtnOpenBodyAnalyzer_Click);
+                Button generatePdfButton = CreateStyledButton("📄 Générer PDF", pdfColor, GeneratePdfButton_Click);
+                Button btnSaveDepthImage = CreateStyledButton("💾 Depth Image", primaryColor, BtnSaveDepthImage_Click);
+                Button btnSaveImage = CreateStyledButton("💾 Color Image", primaryColor, BtnSaveImage_Click);
+                Button sagittalBtn = CreateStyledButton("📊 Capturer Courbe", secondaryColor, SagittalBtn_Click);
+                Button exportBtn = CreateStyledButton("🖼️ Export PNG", accentColor, ExportCurveBtn_Click);
+                Button btnExportData = CreateStyledButton("📁 Export Data", exportColor, BtnExportData_Click);
+                Button btnImportData = CreateStyledButton("📂 Import Data", exportColor, BtnImportData_Click);
  
                 Button toggleInfoBtn = CreateStyledButton("👁️ Afficher Info", Color.Gray, (s, args) =>
                 {
                     infoBox.Visible = !infoBox.Visible;
                     infoBox.Parent.PerformLayout();
                     sideBox.Refresh();
-                }, 120);
+                });
 
                 // Create visual separators
                 Label CreateSeparator() => new Label
@@ -302,13 +290,13 @@ namespace KinectProject
                     Text = "|",
                     ForeColor = Color.FromArgb(100, 100, 120),
                     AutoSize = true,
-                    Margin = new Padding(10, 10, 10, 0),
+                    Margin = new Padding(5, 5, 5, 5),
                     Font = new Font("Segoe UI", 11, FontStyle.Bold)
                 };
 
                 // Add buttons in logical groups with better spacing
                 buttonPanel.Controls.Add(btnOpenBodyAnalyzer);
-                buttonPanel.Controls.Add(generatePdfButton);
+               
                 buttonPanel.Controls.Add(CreateSeparator());
                 buttonPanel.Controls.Add(btnSaveDepthImage);
                 buttonPanel.Controls.Add(btnSaveImage);
@@ -316,9 +304,10 @@ namespace KinectProject
                 buttonPanel.Controls.Add(sagittalBtn);
                 buttonPanel.Controls.Add(exportBtn);
                 buttonPanel.Controls.Add(btnExportData);
+                buttonPanel.Controls.Add(btnImportData);
                 buttonPanel.Controls.Add(CreateSeparator());
                 buttonPanel.Controls.Add(toggleInfoBtn);
-                buttonPanel.Controls.Add(btnImportData);
+                buttonPanel.Controls.Add(generatePdfButton);
 
                 // Add tooltips for better usability
                 ToolTip toolTip = new ToolTip();
@@ -414,33 +403,33 @@ namespace KinectProject
             }
         }
 
-        // Helper method to create styled buttons
-        private Button CreateStyledButton(string text, Color backColor, EventHandler clickHandler)
+
+
+// Helper method to apply rounded corners
+Button ApplyRoundedStyle(Button btn, int radius = 8)
+    {
+
+        // Custom paint to make rounded corners
+        btn.Paint += (s, e) =>
         {
-            Button button = new Button
+            Rectangle rect = btn.ClientRectangle;
+            using (GraphicsPath path = new GraphicsPath())
             {
-                Text = text,
-                BackColor = backColor,
-                ForeColor = Color.White,
-                FlatStyle = FlatStyle.Flat,
-                FlatAppearance = { BorderSize = 0 },
-                Font = new Font("Segoe UI", 9f, FontStyle.Bold),
-                Height = 32,
-                Margin = new Padding(3),
-                Padding = new Padding(8, 0, 8, 0),
-                Cursor = Cursors.Hand,
-                TextAlign = ContentAlignment.MiddleCenter
-            };
+                int r = radius;
+                path.AddArc(rect.X, rect.Y, r, r, 180, 90);
+                path.AddArc(rect.Right - r, rect.Y, r, r, 270, 90);
+                path.AddArc(rect.Right - r, rect.Bottom - r, r, r, 0, 90);
+                path.AddArc(rect.X, rect.Bottom - r, r, r, 90, 90);
+                path.CloseAllFigures();
+                btn.Region = new Region(path);
+            }
+        };
 
-            button.FlatAppearance.MouseOverBackColor = ControlPaint.Light(backColor, 0.2f);
-            button.FlatAppearance.MouseDownBackColor = ControlPaint.Dark(backColor, 0.2f);
-            button.Click += clickHandler;
-
-            return button;
-        }
+        return btn;
+    }
 
 
-        private void KinectSensor_IsAvailableChanged(object sender, IsAvailableChangedEventArgs e)
+    private void KinectSensor_IsAvailableChanged(object sender, IsAvailableChangedEventArgs e)
         {
             this.BeginInvoke((MethodInvoker)(() =>
             {
