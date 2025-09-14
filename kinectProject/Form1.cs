@@ -15,6 +15,7 @@ using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 
+using Newtonsoft.Json; 
 
 
 namespace KinectProject
@@ -119,7 +120,7 @@ namespace KinectProject
                 }
 
                 kinectSensor.Open();
-              
+
                 coordinateMapper = kinectSensor.CoordinateMapper;
 
                 multiSourceFrameReader = kinectSensor.OpenMultiSourceFrameReader(FrameSourceTypes.Depth | FrameSourceTypes.Body | FrameSourceTypes.Color);
@@ -131,41 +132,37 @@ namespace KinectProject
                 colorBitmap = new Bitmap(1920, 1080, PixelFormat.Format32bppArgb);
                 colorPixels = new byte[1920 * 1080 * 4];
 
-
                 // === Main depth view PictureBox ===
                 depthPictureBox = new PictureBox
                 {
-                    Width = 400,  // ✅ set a fixed width (for example 400px)
-                    
-                    Dock = DockStyle.Left,  // ✅ align it to the left, don't fill everything
-                    BackColor = Color.FromArgb(10, 100, 144),
+                    Width = 450,
+                    Dock = DockStyle.Left,
+                    BackColor = Color.FromArgb(25, 25, 40),
                     BorderStyle = BorderStyle.FixedSingle,
-                    SizeMode = PictureBoxSizeMode.Zoom
+                    SizeMode = PictureBoxSizeMode.Zoom,
+                    Padding = new Padding(5)
                 };
-
                 this.Controls.Add(depthPictureBox);
                 depthPictureBox.MouseClick += DepthPictureBox_MouseClick;
-                //
 
+                // === Color view PictureBox ===
                 normalPictureBox = new PictureBox
                 {
-                    Width = 400,  // ✅ set a fixed width (for example 400px)
-
-                    Dock = DockStyle.Right,  // ✅ align it to the left, don't fill everything
-                    BackColor = Color.DarkGray,
+                    Width = 450,
+                    Dock = DockStyle.Right,
+                    BackColor = Color.FromArgb(25, 25, 40),
                     BorderStyle = BorderStyle.FixedSingle,
-                    SizeMode = PictureBoxSizeMode.Zoom
+                    SizeMode = PictureBoxSizeMode.Zoom,
+                    Padding = new Padding(5)
                 };
-
-               // normalPictureBox.SizeMode = PictureBoxSizeMode.Zoom;
                 this.Controls.Add(normalPictureBox);
 
                 // === Right Panel (sideBox + infoBox) ===
                 Panel rightPanel = new Panel
                 {
                     Dock = DockStyle.Right,
-                    Width = 370,
-                    BackColor = Color.Black
+                    Width = 300,
+                    BackColor = Color.FromArgb(15, 15, 25)
                 };
                 this.Controls.Add(rightPanel);
 
@@ -173,14 +170,14 @@ namespace KinectProject
                 Panel sideContainer = new Panel
                 {
                     Dock = DockStyle.Fill,
-                    BackColor = Color.Black
+                    BackColor = Color.FromArgb(15, 15, 25)
                 };
                 rightPanel.Controls.Add(sideContainer);
 
                 sideBox = new PictureBox
                 {
                     Dock = DockStyle.Fill,
-                    BackColor = Color.FromArgb(30, 30, 30),
+                    BackColor = Color.FromArgb(20, 20, 30),
                     BorderStyle = BorderStyle.FixedSingle
                 };
                 sideContainer.Controls.Add(sideBox);
@@ -188,7 +185,7 @@ namespace KinectProject
 
                 infoBox = new PictureBox
                 {
-                    Height = 150,
+                    Height = 120,
                     Dock = DockStyle.Bottom,
                     BackColor = Color.Transparent,
                     Visible = true
@@ -197,241 +194,207 @@ namespace KinectProject
 
                 angleSpineBox = new PictureBox
                 {
-                    Height = 50,
+                    Height = 40,
                     Dock = DockStyle.Bottom,
                     BackColor = Color.Transparent,
                     Visible = true
                 };
                 infoBox.Controls.Add(angleSpineBox);
-                /////////////////////
-
 
                 realAngleCobb = new PictureBox
                 {
-                    Height = 50,
+                    Height = 40,
                     Dock = DockStyle.Bottom,
-                    BackColor = Color.Red,
+                    BackColor = Color.Transparent,
                     Visible = true
                 };
                 infoBox.Controls.Add(realAngleCobb);
-
-                /////////////////////
                 // === Top panel with controls ===
                 Panel topPanel = new Panel
                 {
                     Dock = DockStyle.Top,
-                    Height = 60,
-                    BackColor = Color.FromArgb(64, 64, 64),
-                    Padding = new Padding(10)
+                    Height = 80, // Slightly taller to accommodate better button layout
+                    BackColor = Color.FromArgb(30, 30, 45),
+                    Padding = new Padding(8, 12, 8, 8)
                 };
                 this.Controls.Add(topPanel);
 
-                TableLayoutPanel controlLayout = new TableLayoutPanel
+                // Create a more organized flow layout for buttons
+                FlowLayoutPanel buttonPanel = new FlowLayoutPanel
                 {
                     Dock = DockStyle.Fill,
-                    ColumnCount = 9,
-                    RowCount = 1,
-                    BackColor = Color.Transparent
+                    FlowDirection = FlowDirection.LeftToRight,
+                    WrapContents = true,
+                    BackColor = Color.Transparent,
+                    AutoSize = true,
+                    Padding = new Padding(0, 5, 0, 0)
                 };
-                controlLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
-                controlLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 150));
-                controlLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 150));
-                controlLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 150));
-                controlLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 150));
-                controlLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 170));
-                controlLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 170));
-                controlLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 140));
-                topPanel.Controls.Add(controlLayout);
+                topPanel.Controls.Add(buttonPanel);
 
-                //Button captureBtn = new Button
-                //{
-                //    Text = "Capturer Vue 3D",
-                //    Dock = DockStyle.Fill,
-                //    Height = 36,
-                //    BackColor = Color.FromArgb(76, 175, 80),
-                //    ForeColor = Color.White,
-                //    FlatStyle = FlatStyle.Flat,
-                //    Margin = new Padding(2)
-                //};
-                //captureBtn.FlatAppearance.BorderSize = 0;
-                //captureBtn.Click += (s, args) =>
-                //{
-                //    string label = Microsoft.VisualBasic.Interaction.InputBox("Nom de la vue (ex: face, gauche...)", "Nom vue", "face");
-                //    if (string.IsNullOrWhiteSpace(label)) return;
-                //    string fileName = $"capture_{label}_{DateTime.Now:HHmmss}.ply";
-                //    CapturePointCloud(fileName);
-                //};
-                //controlLayout.Controls.Add(captureBtn, 0, 0);
+                // Professional color scheme
+                Color primaryColor = Color.FromArgb(65, 105, 225);    // Royal Blue
+                Color secondaryColor = Color.FromArgb(50, 205, 50);   // Lime Green
+                Color accentColor = Color.FromArgb(255, 140, 0);      // Dark Orange
+                Color exportColor = Color.FromArgb(138, 43, 226);     // Blue Violet
+                Color pdfColor = Color.FromArgb(220, 20, 60);         // Crimson
+                Color analyzerColor = Color.FromArgb(30, 144, 255);   // Dodger Blue
 
-                //jointSelector1.DropDownStyle = ComboBoxStyle.DropDownList;
-                //jointSelector1.Items.AddRange(Enum.GetNames(typeof(JointType)));
-                //jointSelector1.SelectedIndex = 0;
-                //jointSelector1.Dock = DockStyle.Fill;
-                //jointSelector1.BackColor = Color.FromArgb(50, 50, 50);
-                //jointSelector1.ForeColor = Color.White;
-                //jointSelector1.FlatStyle = FlatStyle.Flat;
-                //controlLayout.Controls.Add(jointSelector1, 1, 0);
-
-                //jointSelector2.DropDownStyle = ComboBoxStyle.DropDownList;
-                //jointSelector2.Items.AddRange(Enum.GetNames(typeof(JointType)));
-                //jointSelector2.SelectedIndex = 1;
-                //jointSelector2.Dock = DockStyle.Fill;
-                //jointSelector2.BackColor = Color.FromArgb(50, 50, 50);
-                //jointSelector2.ForeColor = Color.White;
-                //jointSelector2.FlatStyle = FlatStyle.Flat;
-                //controlLayout.Controls.Add(jointSelector2, 2, 0);
-
-                //depthDiffLabel.Text = "Depth Difference: - mm";
-                //depthDiffLabel.Dock = DockStyle.Fill;
-                //depthDiffLabel.ForeColor = Color.White;
-                //depthDiffLabel.TextAlign = ContentAlignment.MiddleLeft;
-                //controlLayout.Controls.Add(depthDiffLabel, 3, 0);
-
-
-                Button btnSaveImage = new Button
+                // Helper method to create styled buttons with proper width
+                Button CreateStyledButton(string text, Color backColor, EventHandler clickHandler, int minWidth = 120)
                 {
-                    Text = "save image",
-                    Dock = DockStyle.Fill,
-                    Height = 36,
-                    BackColor = Color.FromArgb(33, 150, 243),
-                    ForeColor = Color.White,
-                    FlatStyle = FlatStyle.Flat,
-                    Margin = new Padding(2)
-                };
-                btnSaveImage.Click += BtnSaveImage_Click;
-                controlLayout.Controls.Add(btnSaveImage, 4, 0);
+                    Button button = new Button
+                    {
+                        Text = text,
+                        BackColor = backColor,
+                        ForeColor = Color.White,
+                        FlatStyle = FlatStyle.Flat,
+                        FlatAppearance = { BorderSize = 0 },
+                        Font = new Font("Segoe UI", 9f, FontStyle.Bold),
+                        Height = 32,
+                        MinimumSize = new Size(minWidth, 32),
+                        Margin = new Padding(4, 0, 4, 0),
+                        Padding = new Padding(4, 0, 4, 0),
+                        Cursor = Cursors.Hand,
+                        TextAlign = ContentAlignment.MiddleCenter,
+                        AutoSize = true,
+                        AutoSizeMode = AutoSizeMode.GrowAndShrink
+                    };
 
-                Button btnSaveDepthImage = new Button
-                {
-                    Text = "save depth image",
-                    Dock = DockStyle.Fill,
-                    Height = 36,
-                    BackColor = Color.FromArgb(33, 10, 243),
-                    ForeColor = Color.White,
-                    FlatStyle = FlatStyle.Flat,
-                    Margin = new Padding(2)
-                };
-                btnSaveDepthImage.Click += BtnSaveDepthImage_Click;
-                controlLayout.Controls.Add(btnSaveDepthImage, 3, 0);
+                    button.FlatAppearance.MouseOverBackColor = ControlPaint.Light(backColor, 0.2f);
+                    button.FlatAppearance.MouseDownBackColor = ControlPaint.Dark(backColor, 0.2f);
+                    button.Click += clickHandler;
 
-                Button sagittalBtn = new Button
-                {
-                    Text = "Capturer Courbe Sagittale",
-                    Dock = DockStyle.Fill,
-                    Height = 36,
-                    BackColor = Color.FromArgb(33, 150, 243),
-                    ForeColor = Color.White,
-                    FlatStyle = FlatStyle.Flat,
-                    Margin = new Padding(2)
-                };
-                sagittalBtn.FlatAppearance.BorderSize = 0;
-                sagittalBtn.Click += SagittalBtn_Click;
-                controlLayout.Controls.Add(sagittalBtn, 4, 0);
+                    return button;
+                }
 
-                Button exportBtn = new Button
-                {
-                    Text = "Exporter Courbe PNG",
-                    Dock = DockStyle.Fill,
-                    Height = 36,
-                    BackColor = Color.FromArgb(255, 193, 7),
-                    ForeColor = Color.Black,
-                    FlatStyle = FlatStyle.Flat,
-                    Margin = new Padding(2)
-                };
-                exportBtn.FlatAppearance.BorderSize = 0;
-                exportBtn.Click += ExportCurveBtn_Click;
-                controlLayout.Controls.Add(exportBtn, 5, 0);
-
-                Button toggleInfoBtn = new Button
-                {
-                    Text = "Afficher Info",
-                    Dock = DockStyle.Fill,
-                    Height = 36,
-                    BackColor = Color.Gray,
-                    ForeColor = Color.White,
-                    FlatStyle = FlatStyle.Flat,
-                    Margin = new Padding(2)
-                };
-                toggleInfoBtn.Click += (s, args) =>
+                // Create and style buttons with clearer text and proper widths
+                Button btnOpenBodyAnalyzer = CreateStyledButton("📷 Analyser Image", analyzerColor, BtnOpenBodyAnalyzer_Click, 120);
+                Button generatePdfButton = CreateStyledButton("📄 Générer PDF", pdfColor, GeneratePdfButton_Click, 120);
+                Button btnSaveDepthImage = CreateStyledButton("💾 Depth Image", primaryColor, BtnSaveDepthImage_Click, 120);
+                Button btnSaveImage = CreateStyledButton("💾 Color Image", primaryColor, BtnSaveImage_Click, 120);
+                Button sagittalBtn = CreateStyledButton("📊 Capturer Courbe", secondaryColor, SagittalBtn_Click, 120);
+                Button exportBtn = CreateStyledButton("🖼️ Export PNG", accentColor, ExportCurveBtn_Click, 120);
+                Button btnExportData = CreateStyledButton("📁 Export Data", exportColor, BtnExportData_Click, 120);
+                Button btnImportData = CreateStyledButton("📂 Import Data", exportColor, BtnImportData_Click, 130);
+ 
+                Button toggleInfoBtn = CreateStyledButton("👁️ Afficher Info", Color.Gray, (s, args) =>
                 {
                     infoBox.Visible = !infoBox.Visible;
                     infoBox.Parent.PerformLayout();
                     sideBox.Refresh();
-                };
-                controlLayout.Controls.Add(toggleInfoBtn, 6, 0);
-                //////////////////
+                }, 120);
 
-                Button generatePdfButton = new Button
+                // Create visual separators
+                Label CreateSeparator() => new Label
                 {
-                    Text = "Générer PDF",
-                    Dock = DockStyle.Fill,
-                    Height = 36,
-                    BackColor = Color.Gray,
-                    ForeColor = Color.White,
-                    FlatStyle = FlatStyle.Flat,
-                    Margin = new Padding(2)
+                    Text = "|",
+                    ForeColor = Color.FromArgb(100, 100, 120),
+                    AutoSize = true,
+                    Margin = new Padding(10, 10, 10, 0),
+                    Font = new Font("Segoe UI", 11, FontStyle.Bold)
                 };
-                generatePdfButton.Click += GeneratePdfButton_Click;
 
-                controlLayout.Controls.Add(generatePdfButton, 1, 0);
-                /////////////////////////
-                ///
-                Button btnOpenBodyAnalyzer = new Button
-                {
-                    Text = "Analyser une Image",
-                    Dock = DockStyle.Fill,
-                    Height = 36,
-                    BackColor = Color.Gray,
-                    ForeColor = Color.White,
-                    FlatStyle = FlatStyle.Flat,
-                    Margin = new Padding(2)
-                };
-                // Add the click event handler:
-                btnOpenBodyAnalyzer.Click += BtnOpenBodyAnalyzer_Click;
+                // Add buttons in logical groups with better spacing
+                buttonPanel.Controls.Add(btnOpenBodyAnalyzer);
+                buttonPanel.Controls.Add(generatePdfButton);
+                buttonPanel.Controls.Add(CreateSeparator());
+                buttonPanel.Controls.Add(btnSaveDepthImage);
+                buttonPanel.Controls.Add(btnSaveImage);
+                buttonPanel.Controls.Add(CreateSeparator());
+                buttonPanel.Controls.Add(sagittalBtn);
+                buttonPanel.Controls.Add(exportBtn);
+                buttonPanel.Controls.Add(btnExportData);
+                buttonPanel.Controls.Add(CreateSeparator());
+                buttonPanel.Controls.Add(toggleInfoBtn);
+                buttonPanel.Controls.Add(btnImportData);
 
-                // Add button to your layout
-                controlLayout.Controls.Add(btnOpenBodyAnalyzer, 0, 0);
+                // Add tooltips for better usability
+                ToolTip toolTip = new ToolTip();
+                toolTip.SetToolTip(btnSaveDepthImage, "Sauvegarder l'image de profondeur");
+                toolTip.SetToolTip(btnSaveImage, "Sauvegarder l'image couleur");
+                toolTip.SetToolTip(btnExportData, "Exporter les données de courbe (JSON/CSV)");
+                toolTip.SetToolTip(exportBtn, "Exporter la courbe en image PNG");
+                toolTip.SetToolTip(sagittalBtn, "Capturer la courbe sagittale du dos");
+                toolTip.SetToolTip(btnOpenBodyAnalyzer, "Ouvrir l'analyseur d'image corporelle");
+                toolTip.SetToolTip(generatePdfButton, "Générer un rapport PDF complet");
+                toolTip.SetToolTip(toggleInfoBtn, "Afficher/Masquer les informations");
+                toolTip.SetToolTip(btnImportData, "Importer des données de courbe sauvegardées");
 
-
-
-                ///////////////////////////////
-                ///
-
-
+                // Event handlers
                 sideBox.MouseDown += SideBox_MouseDown;
                 sideBox.MouseUp += SideBox_MouseUp;
-                sideBox.MouseMove += SideBox_MouseMove; // (You already had this one)
+                sideBox.MouseMove += SideBox_MouseMove;
 
-
-
-
-
-                ////////////////////////:
-
-
-
-
-
-                /////////////////
+                // Status strip
                 StatusStrip statusStrip = new StatusStrip
                 {
                     Dock = DockStyle.Bottom,
-                    BackColor = Color.FromArgb(64, 64, 64),
-                    ForeColor = Color.White
+                    BackColor = Color.FromArgb(40, 40, 60),
+                    ForeColor = Color.White,
+                    RenderMode = ToolStripRenderMode.Professional
                 };
+
                 ToolStripStatusLabel statusLabel = new ToolStripStatusLabel
                 {
                     Text = "Veuillez vous placer à 1-2 mètres du capteur pour une détection optimale.",
-                    ForeColor = Color.White
+                    ForeColor = Color.LightGray,
+                    Font = new Font("Segoe UI", 9f)
                 };
+
+                ToolStripStatusLabel kinectStatus = new ToolStripStatusLabel
+                {
+                    Text = "Kinect: Connecté",
+                    ForeColor = Color.LightGreen,
+                    Font = new Font("Segoe UI", 9f, FontStyle.Bold),
+                    Alignment = ToolStripItemAlignment.Right
+                };
+
                 statusStrip.Items.Add(statusLabel);
+                statusStrip.Items.Add(kinectStatus);
                 this.Controls.Add(statusStrip);
 
-                this.BackColor = Color.FromArgb(45, 45, 45);
-                this.Text = "Kinect Body Analysis Pro";
-                this.Font = new System.Drawing.Font("Segoe UI", 9f, FontStyle.Regular);
+                // Main form styling
+                this.BackColor = Color.FromArgb(45, 45, 60);
+                this.Text = "Kinect Body Analysis Pro - Posture Assessment System";
+                this.Font = new Font("Segoe UI", 9f, FontStyle.Regular);
+                this.ForeColor = Color.White;
                 this.AutoScaleMode = AutoScaleMode.Dpi;
                 this.DoubleBuffered = true;
+
+                // Add context menu for curve management
+                ContextMenuStrip curveMenu = new ContextMenuStrip();
+                curveMenu.Items.Add("Ouvrir le visualisateur multi-courbes", null, (s, args) =>
+                {
+                    if (lastSmoothedSpinePoints != null && lastSmoothedSpinePoints.Count > 0)
+                    {
+                        var currentCurve = new SpineCurveData
+                        {
+                            CaptureTime = DateTime.Now,
+                            Points = lastSmoothedSpinePoints.Select(p => PointFData.FromPointF(p)).ToList(),
+                            MaxZIndex = maxZIndex,
+                            ManualZRef = manualZRef,
+                            FixedDeepestXPixel = fixedDeepestXPixel,
+                            SpineAngle = spineAngle
+                        };
+
+                        OpenMultiCurveViewer(new List<SpineCurveData> { currentCurve });
+                    }
+                    else
+                    {
+                        MessageBox.Show("Aucune courbe active à afficher.", "Information",
+                                       MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    }
+                });
+
+                this.ContextMenuStrip = curveMenu;
+
+
+                // Add form icon if available
+                try
+                {
+                    // this.Icon = YourIconHere;
+                }
+                catch { }
             }
             catch (Exception ex)
             {
@@ -439,7 +402,31 @@ namespace KinectProject
             }
         }
 
-    
+        // Helper method to create styled buttons
+        private Button CreateStyledButton(string text, Color backColor, EventHandler clickHandler)
+        {
+            Button button = new Button
+            {
+                Text = text,
+                BackColor = backColor,
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat,
+                FlatAppearance = { BorderSize = 0 },
+                Font = new Font("Segoe UI", 9f, FontStyle.Bold),
+                Height = 32,
+                Margin = new Padding(3),
+                Padding = new Padding(8, 0, 8, 0),
+                Cursor = Cursors.Hand,
+                TextAlign = ContentAlignment.MiddleCenter
+            };
+
+            button.FlatAppearance.MouseOverBackColor = ControlPaint.Light(backColor, 0.2f);
+            button.FlatAppearance.MouseDownBackColor = ControlPaint.Dark(backColor, 0.2f);
+            button.Click += clickHandler;
+
+            return button;
+        }
+
 
         private void KinectSensor_IsAvailableChanged(object sender, IsAvailableChangedEventArgs e)
         {
@@ -1708,9 +1695,281 @@ private void BtnOpenBodyAnalyzer_Click(object sender, EventArgs e)
 
 
 
-   
+        private void BtnExportData_Click(object sender, EventArgs e)
+        {
+            if (lastSmoothedSpinePoints == null || lastSmoothedSpinePoints.Count == 0)
+            {
+                MessageBox.Show("Aucune donnée de courbe disponible pour l'export.", "Information",
+                               MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            using (SaveFileDialog sfd = new SaveFileDialog())
+            {
+                sfd.Filter = "JSON Files|*.json|CSV Files|*.csv";
+                sfd.Title = "Exporter les données de courbe";
+                sfd.FileName = $"SpineCurveData_{DateTime.Now:yyyyMMdd_HHmmss}";
+
+                if (sfd.ShowDialog() == DialogResult.OK)
+                {
+                    try
+                    {
+                        if (sfd.FilterIndex == 1) // JSON
+                        {
+                            ExportCurveDataAsJson(sfd.FileName);
+                        }
+                        else // CSV
+                        {
+                            ExportCurveDataAsCsv(sfd.FileName);
+                        }
+
+                        MessageBox.Show($"Données exportées avec succès: {sfd.FileName}",
+                                      "Succès", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    }
+                    catch (Exception ex)
+                    {
+                        MessageBox.Show($"Erreur lors de l'export: {ex.Message}",
+                                      "Erreur", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    }
+                }
+            }
+        }
+
+        private void ExportCurveDataAsJson(string filePath)
+        {
+            // Create data object
+            SpineCurveData curveData = new SpineCurveData
+            {
+                CaptureTime = DateTime.Now,
+                Points = lastSmoothedSpinePoints.Select(p => PointFData.FromPointF(p)).ToList(),
+                MaxZIndex = maxZIndex,
+                ManualZRef = manualZRef,
+                FixedDeepestXPixel = fixedDeepestXPixel,
+                SpineAngle = spineAngle,
+                PatientIdentifier = "Unknown",
+                // ADD THE ORIGINAL SCALING FACTORS
+                OriginalOffsetX = 50f,    // Same as your main form
+                OriginalScaleX = 0.1f     // Same as your main form
+            };
+
+            // Serialize to JSON
+            string json = Newtonsoft.Json.JsonConvert.SerializeObject(curveData,
+                Newtonsoft.Json.Formatting.Indented);
+
+            File.WriteAllText(filePath, json);
+        }
+
+        private void ExportCurveDataAsCsv(string filePath)
+        {
+            using (StreamWriter writer = new StreamWriter(filePath))
+            {
+                // Write header
+                writer.WriteLine("Index,X (Z-depth mm),Y (position),IsMaxPoint");
+
+                // Write data points
+                for (int i = 0; i < lastSmoothedSpinePoints.Count; i++)
+                {
+                    var point = lastSmoothedSpinePoints[i];
+                    string isMaxPoint = (i == maxZIndex) ? "Yes" : "No";
+                    writer.WriteLine($"{i},{point.X:F2},{point.Y:F2},{isMaxPoint}");
+                }
+
+                // Write metadata
+                writer.WriteLine();
+                writer.WriteLine($"# Metadata");
+                writer.WriteLine($"CaptureTime,{DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+                writer.WriteLine($"MaxZIndex,{maxZIndex}");
+                writer.WriteLine($"ManualZRef,{manualZRef:F2}");
+                writer.WriteLine($"FixedDeepestXPixel,{fixedDeepestXPixel:F2}");
+                writer.WriteLine($"SpineAngle,{spineAngle:F2}");
+            }
+
+        }
+
+
+
+        private void BtnImportData_Click(object sender, EventArgs e)
+        {
+            using (OpenFileDialog ofd = new OpenFileDialog())
+            {
+                ofd.Filter = "JSON Files|*.json|CSV Files|*.csv";
+                ofd.Title = "Importer les données de courbe";
+                ofd.CheckFileExists = true;
+                ofd.Multiselect = true; // ← ENABLE MULTI-SELECT
+
+                if (ofd.ShowDialog() == DialogResult.OK)
+                {
+                    try
+                    {
+                        List<SpineCurveData> loadedCurves = new List<SpineCurveData>();
+
+                        foreach (string filePath in ofd.FileNames) // ← PROCESS ALL FILES
+                        {
+                            SpineCurveData curveData = null;
+
+                            if (filePath.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
+                            {
+                                curveData = ImportCurveDataFromJson(filePath);
+                            }
+                            else if (filePath.EndsWith(".csv", StringComparison.OrdinalIgnoreCase))
+                            {
+                                curveData = ImportCurveDataFromCsv(filePath);
+                            }
+
+                            if (curveData != null)
+                            {
+                                curveData.FilePath = filePath; // Store file path for reference
+                                loadedCurves.Add(curveData);
+                            }
+                        }
+
+                        if (loadedCurves.Count > 0)
+                        {
+                            if (loadedCurves.Count == 1)
+                            {
+                                // Single file - open in individual viewer
+                                OpenCurveDataViewer(loadedCurves[0]);
+                            }
+                            else
+                            {
+                                // Multiple files - open in multi-curve viewer
+                                OpenMultiCurveViewer(loadedCurves);
+                            }
+                        }
+                        else
+                        {
+                            MessageBox.Show("Aucune donnée valide trouvée dans les fichiers sélectionnés.",
+                                          "Information", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        MessageBox.Show($"Erreur lors de l'import: {ex.Message}",
+                                      "Erreur", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    }
+                }
+            }
+        }
+
+
+        private SpineCurveData ImportCurveDataFromJson(string filePath)
+        {
+            string json = File.ReadAllText(filePath);
+            return JsonConvert.DeserializeObject<SpineCurveData>(json);
+        }
+
+        private SpineCurveData ImportCurveDataFromCsv(string filePath)
+        {
+            // Simple CSV import - you might want to enhance this based on your CSV format
+            var lines = File.ReadAllLines(filePath);
+            var curveData = new SpineCurveData
+            {
+                CaptureTime = DateTime.Now,
+                Points = new List<PointFData>(),
+                MaxZIndex = -1
+            };
+
+            foreach (var line in lines)
+            {
+                if (line.StartsWith("#") || string.IsNullOrWhiteSpace(line))
+                    continue;
+
+                var parts = line.Split(',');
+                if (parts.Length >= 3 && float.TryParse(parts[1], out float x) && float.TryParse(parts[2], out float y))
+                {
+                    curveData.Points.Add(new PointFData(x, y));
+
+                    // Check if this is the max point
+                    if (parts.Length >= 4 && parts[3].Trim().Equals("Yes", StringComparison.OrdinalIgnoreCase))
+                    {
+                        curveData.MaxZIndex = curveData.Points.Count - 1;
+                    }
+                }
+                // Parse metadata
+                else if (parts.Length >= 2)
+                {
+                    switch (parts[0].ToLower())
+                    {
+                        case "capturetime":
+                            if (DateTime.TryParse(parts[1], out DateTime captureTime))
+                                curveData.CaptureTime = captureTime;
+                            break;
+                        case "maxzindex":
+                            if (int.TryParse(parts[1], out int maxIndex))
+                                curveData.MaxZIndex = maxIndex;
+                            break;
+                        case "manualzref":
+                            if (float.TryParse(parts[1], out float manualRef))
+                                curveData.ManualZRef = manualRef;
+                            break;
+                        case "fixeddeepestxpixel":
+                            if (float.TryParse(parts[1], out float fixedX))
+                                curveData.FixedDeepestXPixel = fixedX;
+                            break;
+                        case "spineangle":
+                            if (double.TryParse(parts[1], out double angle))
+                                curveData.SpineAngle = angle;
+                            break;
+                    }
+                }
+            }
+
+            return curveData.Points.Count > 0 ? curveData : null;
+        }
+
+        private void OpenCurveDataViewer(SpineCurveData curveData)
+        {
+            CurveDataViewer viewer = new CurveDataViewer();
+            viewer.LoadCurveData(curveData);
+
+            // Set owner and show
+            viewer.Show(this); // This is the key fix
+
+            // Position relative to main form
+            viewer.StartPosition = FormStartPosition.Manual;
+
+            // Calculate position to the right of main form
+            int newX = this.Right + 10;
+            int newY = this.Top;
+
+            // Ensure it doesn't go off-screen
+            Screen currentScreen = Screen.FromControl(this);
+            if (newX + viewer.Width > currentScreen.WorkingArea.Right)
+            {
+                newX = currentScreen.WorkingArea.Right - viewer.Width - 10;
+            }
+
+            viewer.Location = new Point(newX, newY);
+
+            // Ensure it gets focus
+            viewer.Activate();
+        }
+
+        private void OpenMultiCurveViewer(List<SpineCurveData> curves)
+        {
+            MultiCurveViewer multiViewer = new MultiCurveViewer();
+            multiViewer.LoadCurves(curves);
+
+            // Position near main form
+            multiViewer.StartPosition = FormStartPosition.Manual;
+            multiViewer.Location = new Point(this.Right + 10, this.Top);
+
+            // Ensure it fits on screen
+            Screen currentScreen = Screen.FromControl(this);
+            if (multiViewer.Right > currentScreen.WorkingArea.Right)
+            {
+                multiViewer.Left = currentScreen.WorkingArea.Right - multiViewer.Width - 10;
+            }
+
+            multiViewer.Show(this);
+            multiViewer.Activate();
+        }
+
+
+    }
+
     }
 
 
 
-}
+
