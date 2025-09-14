@@ -95,7 +95,9 @@ namespace KinectProject
         private const int MIN_BLOB_SIZE = 500;
         private Bitmap _displayBuffer;
         private readonly object _bufferLock = new object();
-       
+        //
+        private ToolStripStatusLabel kinectStatus;
+
 
 
         public Form1()
@@ -110,6 +112,16 @@ namespace KinectProject
         {
             try
             {
+                kinectStatus = new ToolStripStatusLabel
+                {
+                    Text = "Kinect: Non détecté",
+                    ForeColor = Color.LightCoral,
+                    Font = new Font("Segoe UI", 9f, FontStyle.Bold),
+                    Alignment = ToolStripItemAlignment.Right
+                };
+                statusStrip.Items.Add(kinectStatus);
+
+
                 // === Initialize Kinect ===
                 kinectSensor = KinectSensor.GetDefault();
                 if (kinectSensor == null)
