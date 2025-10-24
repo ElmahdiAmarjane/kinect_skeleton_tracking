@@ -146,6 +146,12 @@
       <SubType>Form</SubType>
     </Compile>
     <Compile Include="PostureAnalyzer.cs" />
+    <Compile Include="previewImage.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="previewImage.Designer.cs">
+      <DependentUpon>previewImage.cs</DependentUpon>
+    </Compile>
     <Compile Include="Program.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <EmbeddedResource Include="BodyPictureAnalyzer.resx">

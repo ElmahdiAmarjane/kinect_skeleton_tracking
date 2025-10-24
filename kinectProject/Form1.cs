@@ -276,7 +276,7 @@ namespace KinectProject
                 Button exportBtn = CreateStyledButton("🖼️ Export PNG", accentColor, ExportCurveBtn_Click);
                 Button btnExportData = CreateStyledButton("📁 Export Data", exportColor, BtnExportData_Click);
                 Button btnImportData = CreateStyledButton("📂 Import Data", exportColor, BtnImportData_Click);
- 
+                Button btnNormalImage = CreateStyledButton("🖼️ Normal Image", exportColor, BtnNormalImage_Click);
                 Button toggleInfoBtn = CreateStyledButton("👁️ Afficher Info", Color.Gray, (s, args) =>
                 {
                     infoBox.Visible = !infoBox.Visible;
@@ -308,7 +308,7 @@ namespace KinectProject
                 buttonPanel.Controls.Add(CreateSeparator());
                 buttonPanel.Controls.Add(toggleInfoBtn);
                 buttonPanel.Controls.Add(generatePdfButton);
-
+                buttonPanel.Controls.Add(btnNormalImage);
                 // Add tooltips for better usability
                 ToolTip toolTip = new ToolTip();
                 toolTip.SetToolTip(btnSaveDepthImage, "Sauvegarder l'image de profondeur");
@@ -320,6 +320,7 @@ namespace KinectProject
                 toolTip.SetToolTip(generatePdfButton, "Générer un rapport PDF complet");
                 toolTip.SetToolTip(toggleInfoBtn, "Afficher/Masquer les informations");
                 toolTip.SetToolTip(btnImportData, "Importer des données de courbe sauvegardées");
+                toolTip.SetToolTip(btnNormalImage, "Sauvegarder l'image couleur normal");
 
                 // Event handlers
                 sideBox.MouseDown += SideBox_MouseDown;
@@ -403,10 +404,20 @@ namespace KinectProject
             }
         }
 
+    private void KinectSensor_IsAvailableChanged(object sender, IsAvailableChangedEventArgs e)
+        {
+            this.BeginInvoke((MethodInvoker)(() =>
+            {
+                if (!e.IsAvailable)
+                {
+                    MessageBox.Show("Connexion perdue avec le capteur Kinect.", "Alerte", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
+            }));
+        }
 
 
 // Helper method to apply rounded corners
-Button ApplyRoundedStyle(Button btn, int radius = 8)
+         Button ApplyRoundedStyle(Button btn, int radius = 8)
     {
 
         // Custom paint to make rounded corners
@@ -429,16 +440,6 @@ Button ApplyRoundedStyle(Button btn, int radius = 8)
     }
 
 
-    private void KinectSensor_IsAvailableChanged(object sender, IsAvailableChangedEventArgs e)
-        {
-            this.BeginInvoke((MethodInvoker)(() =>
-            {
-                if (!e.IsAvailable)
-                {
-                    MessageBox.Show("Connexion perdue avec le capteur Kinect.", "Alerte", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                }
-            }));
-        }
 
 
         private void MultiSourceFrameReader_MultiSourceFrameArrived(object sender, MultiSourceFrameArrivedEventArgs e)
@@ -642,23 +643,27 @@ Button ApplyRoundedStyle(Button btn, int radius = 8)
 
         private Color HsvToRgb(double h, double s, double v)
         {
-            int hi = Convert.ToInt32(Math.Floor(h / 60)) % 6;
-            double f = h / 60 - Math.Floor(h / 60);
+            // Normalize hue to [0, 360)
+            h = (h % 360 + 360) % 360;
 
-            v = v * 255;
-            byte p = (byte)(v * (1 - s));
-            byte q = (byte)(v * (1 - f * s));
-            byte t = (byte)(v * (1 - (1 - f) * s));
+            double c = v * s;
+            double x = c * (1 - Math.Abs((h / 60) % 2 - 1));
+            double m = v - c;
 
-            switch (hi)
-            {
-                case 0: return Color.FromArgb((byte)v, t, p);
-                case 1: return Color.FromArgb(q, (byte)v, p);
-                case 2: return Color.FromArgb(p, (byte)v, t);
-                case 3: return Color.FromArgb(p, q, (byte)v);
-                case 4: return Color.FromArgb(t, p, (byte)v);
-                default: return Color.FromArgb((byte)v, p, q);
-            }
+            double r1, g1, b1;
+
+            if (h < 60) { r1 = c; g1 = x; b1 = 0; }
+            else if (h < 120) { r1 = x; g1 = c; b1 = 0; }
+            else if (h < 180) { r1 = 0; g1 = c; b1 = x; }
+            else if (h < 240) { r1 = 0; g1 = x; b1 = c; }
+            else if (h < 300) { r1 = x; g1 = 0; b1 = c; }
+            else { r1 = c; g1 = 0; b1 = x; }
+
+            byte r = (byte)Math.Round((r1 + m) * 255);
+            byte g = (byte)Math.Round((g1 + m) * 255);
+            byte b = (byte)Math.Round((b1 + m) * 255);
+
+            return Color.FromArgb(r, g, b);
         }
 
 
@@ -1374,8 +1379,8 @@ Button ApplyRoundedStyle(Button btn, int radius = 8)
                 gfx.DrawString("Resultats Analyse :", labelFont, XBrushes.Black, margin, yPoint);
                 yPoint += 20;
 
-                gfx.DrawString($"Angle de Cobb V2 : {cobbAngleV2:F1}°", valueFont, XBrushes.Black, margin, yPoint);
-                yPoint += 20;
+                //gfx.DrawString($"Angle de Cobb V2 : {cobbAngleV2:F1}°", valueFont, XBrushes.Black, margin, yPoint);
+                //yPoint += 20;
 
                 // 🖼️ Première image
                 if (imageToInclude != null)
@@ -1966,6 +1971,71 @@ private void BtnOpenBodyAnalyzer_Click(object sender, EventArgs e)
             multiViewer.Activate();
         }
 
+
+
+        private void BtnNormalImage_Click(object sender, EventArgs e)
+        {
+            try
+            {
+                if (colorBitmap == null)
+                {
+                    MessageBox.Show("No color image available to capture.", "Info",
+                                   MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
+
+                // Create a new bitmap from the current color frame
+                var multiFrame = multiSourceFrameReader.AcquireLatestFrame();
+                {
+                    if (multiFrame == null) return;
+
+                    using (var colorFrame = multiFrame.ColorFrameReference.AcquireFrame())
+                    {
+                        if (colorFrame == null) return;
+
+                        // Copy the color frame data to the bitmap
+                        colorFrame.CopyConvertedFrameDataToArray(colorPixels, ColorImageFormat.Bgra);
+                        BitmapData bmpData = colorBitmap.LockBits(
+                            new Rectangle(0, 0, colorBitmap.Width, colorBitmap.Height),
+                            ImageLockMode.WriteOnly,
+                            PixelFormat.Format32bppArgb);
+                        Marshal.Copy(colorPixels, 0, bmpData.Scan0, colorPixels.Length);
+                        colorBitmap.UnlockBits(bmpData);
+                    }
+                }
+
+                // Show preview dialog
+                using (var previewForm = new PreviewForm())
+                {
+                    previewForm.PreviewImage = colorBitmap;
+                    if (previewForm.ShowDialog() == DialogResult.OK)
+                    {
+                        using (SaveFileDialog sfd = new SaveFileDialog())
+                        {
+                            sfd.Filter = "PNG Image|*.png|JPEG Image|*.jpg";
+                            sfd.FileName = $"Kinect_Color_{DateTime.Now:yyyyMMdd_HHmmss}.png";
+                            sfd.Title = "Save Color Image";
+
+                            if (sfd.ShowDialog() == DialogResult.OK)
+                            {
+                                colorBitmap.Save(sfd.FileName);
+                                MessageBox.Show($"Image saved successfully: {sfd.FileName}",
+                                               "Success",
+                                               MessageBoxButtons.OK,
+                                               MessageBoxIcon.Information);
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Error saving image: {ex.Message}",
+                                "Error",
+                                MessageBoxButtons.OK,
+                                MessageBoxIcon.Error);
+            }
+        }
 
     }
 

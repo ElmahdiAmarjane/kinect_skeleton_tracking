@@ -6,6 +6,9 @@ using System.Drawing.Drawing2D;
 using System.IO;
 using System.Linq;
 using System.Windows.Forms;
+using iTextSharp.text;
+using iTextSharp.text.pdf;
+using System.Diagnostics;
 
 namespace kinectProject
 {
@@ -45,7 +48,7 @@ namespace kinectProject
         private ToolMode currentTool = ToolMode.None;
         private EditMode currentEditMode = EditMode.None;
         private List<Measurement> measurements = new List<Measurement>();
-        private Image originalImage;
+        private System.Drawing.Image originalImage;
         private Point? currentStartPoint = null;
         private int measurementCounter = 1;
         private float pixelToRealRatio = 1.0f;
@@ -103,6 +106,7 @@ namespace kinectProject
             AddToolButton("Delete Mode", (s, e) => SetEditMode(EditMode.Delete));
             AddToolButton("Clear All", BtnClear_Click);
             AddToolButton("Toggle Grid", BtnToggleGrid_Click);
+            AddToolButton("Export PDF", (s, e) => ExportToPdf());
 
             // Picture box setup
             pictureBox = new PictureBox();
@@ -203,8 +207,8 @@ namespace kinectProject
                 {
                     try
                     {
-                        originalImage = Image.FromFile(openFileDialog.FileName);
-                        pictureBox.Image = (Image)originalImage.Clone();
+                        originalImage = System.Drawing.Image.FromFile(openFileDialog.FileName);
+                        pictureBox.Image = (System.Drawing.Image)originalImage.Clone();
 
                         // Initialize grid at center
                         gridOrigin = new Point(pictureBox.Width / 2, pictureBox.Height / 2);
@@ -1019,7 +1023,7 @@ namespace kinectProject
             }
 
             // Dessin du texte de l’angle
-            using (Font font = new Font("Arial", 9))
+            using (System.Drawing.Font font = new System.Drawing.Font("Arial", 9))
             using (Brush textBrush = new SolidBrush(Color.White))
             using (Brush bgBrush = new SolidBrush(Color.FromArgb(150, Color.Black)))
             {
@@ -1089,7 +1093,7 @@ namespace kinectProject
 
             // Show angle information
             double angle = Math.Atan2(dy, dx) * (180 / Math.PI);
-            using (Font font = new Font("Arial", 9))
+            using (System.Drawing.Font font = new System.Drawing.Font("Arial", 9))
             using (Brush brush = new SolidBrush(Color.White))
             using (Brush bgBrush = new SolidBrush(Color.FromArgb(128, Color.Black)))
             {
@@ -1116,7 +1120,7 @@ namespace kinectProject
 
             using (Pen pen = new Pen(color, lineWidth))
             using (Brush brush = new SolidBrush(color))
-            using (Font font = new Font("Arial", 9))
+            using (System.Drawing.Font font = new System.Drawing.Font("Arial", 9))
             using (Brush textBrush = new SolidBrush(Color.White))
             using (Brush bgBrush = new SolidBrush(Color.FromArgb(128, Color.Black)))
             {
@@ -1326,6 +1330,253 @@ namespace kinectProject
             }
         }
 
+        private void ExportToPdf()
+        {
+            if (pictureBox.Image == null)
+            {
+                MessageBox.Show("Please load an image first.", "Export Error",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            using (SaveFileDialog saveDialog = new SaveFileDialog())
+            {
+                saveDialog.Filter = "PDF Files|*.pdf";
+                saveDialog.Title = "Export Measurements as PDF";
+                saveDialog.FileName = $"Measurement_Report_{DateTime.Now:yyyyMMdd_HHmmss}.pdf";
+
+                if (saveDialog.ShowDialog() == DialogResult.OK)
+                {
+                    try
+                    {
+                        CreatePdfReport(saveDialog.FileName);
+                        MessageBox.Show($"PDF exported successfully to:\n{saveDialog.FileName}",
+                            "Export Complete", MessageBoxButtons.OK, MessageBoxIcon.Information);
+
+                        // Optionally open the PDF after creation
+                        if (MessageBox.Show("Would you like to open the PDF now?", "Open PDF",
+                            MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
+                        {
+                            Process.Start(saveDialog.FileName);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        MessageBox.Show($"Error creating PDF: {ex.Message}", "Export Error",
+                            MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    }
+                }
+            }
+        }
+
+        private void CreatePdfReport(string filePath)
+        {
+            // Create document with margins
+            Document document = new Document(PageSize.A4, 36, 36, 36, 36);
+            PdfWriter.GetInstance(document, new FileStream(filePath, FileMode.Create));
+            document.Open();
+
+            // Add title
+            iTextSharp.text.Font titleFont = FontFactory.GetFont(FontFactory.HELVETICA_BOLD, 18, BaseColor.DARK_GRAY);
+            Paragraph title = new Paragraph("Body Measurement Analysis Report", titleFont);
+            title.Alignment = Element.ALIGN_CENTER;
+            title.SpacingAfter = 20;
+            document.Add(title);
+
+            // Add creation date
+            iTextSharp.text.Font dateFont = FontFactory.GetFont(FontFactory.HELVETICA, 10, BaseColor.GRAY);
+            Paragraph date = new Paragraph($"Generated on: {DateTime.Now:yyyy-MM-dd HH:mm}", dateFont);
+            date.Alignment = Element.ALIGN_CENTER;
+            date.SpacingAfter = 20;
+            document.Add(date);
+
+            // Add the image
+            if (pictureBox.Image != null)
+            {
+                try
+                {
+                    // Save the current image with measurements to a temporary file
+                    string tempImagePath = Path.GetTempFileName() + ".png";
+                    using (Bitmap bmp = new Bitmap(pictureBox.Width, pictureBox.Height))
+                    {
+                        using (Graphics g = Graphics.FromImage(bmp))
+                        {
+                            g.Clear(pictureBox.BackColor);
+                            if (pictureBox.Image != null)
+                            {
+                                g.DrawImage(pictureBox.Image,
+                                            new System.Drawing.Rectangle(0, 0, pictureBox.Width, pictureBox.Height),
+                                            new System.Drawing.Rectangle(0, 0, pictureBox.Image.Width, pictureBox.Image.Height),
+                                            GraphicsUnit.Pixel);
+                            }
+
+                            // Draw measurements on the image
+                            PaintEventArgs e = new PaintEventArgs(g, new System.Drawing.Rectangle(0, 0, pictureBox.Width, pictureBox.Height));
+                            PictureBox_Paint(pictureBox, e);
+                        }
+                        bmp.Save(tempImagePath, System.Drawing.Imaging.ImageFormat.Png);
+                    }
+
+                    // Add image to PDF
+                    iTextSharp.text.Image pdfImage = iTextSharp.text.Image.GetInstance(tempImagePath);
+                    pdfImage.Alignment = Element.ALIGN_CENTER;
+
+                    // Scale image to fit page width
+                    if (pdfImage.Width > document.PageSize.Width - 72)
+                    {
+                        pdfImage.ScaleToFit(document.PageSize.Width - 72, document.PageSize.Height - 72);
+                    }
+
+                    pdfImage.SpacingAfter = 20;
+                    document.Add(pdfImage);
+
+                    // Clean up temporary file
+                    File.Delete(tempImagePath);
+                }
+                catch (Exception ex)
+                {
+                    document.Add(new Paragraph($"Error adding image to PDF: {ex.Message}"));
+                }
+            }
+
+            // Add measurements table if there are any
+            if (measurements.Any())
+            {
+                // Add measurements header
+                iTextSharp.text.Font tableHeaderFont = FontFactory.GetFont(FontFactory.HELVETICA_BOLD, 12, BaseColor.DARK_GRAY);
+                Paragraph measurementsHeader = new Paragraph("Measurement Summary", tableHeaderFont);
+                measurementsHeader.SpacingBefore = 10;
+                measurementsHeader.SpacingAfter = 10;
+                document.Add(measurementsHeader);
+
+                // Create measurements table
+                PdfPTable table = new PdfPTable(4);
+                table.WidthPercentage = 100;
+                table.SetWidths(new float[] { 2, 3, 2, 3 });
+
+                // Add table headers
+                iTextSharp.text.Font headerFont = FontFactory.GetFont(FontFactory.HELVETICA_BOLD, 10, BaseColor.WHITE);
+                AddTableHeaderCell(table, "Type", headerFont, BaseColor.DARK_GRAY);
+                AddTableHeaderCell(table, "Name", headerFont, BaseColor.DARK_GRAY);
+                AddTableHeaderCell(table, "Pixel Value", headerFont, BaseColor.DARK_GRAY);
+                AddTableHeaderCell(table, "Real Value", headerFont, BaseColor.DARK_GRAY);
+
+                // Add measurement rows
+                iTextSharp.text.Font cellFont = FontFactory.GetFont(FontFactory.HELVETICA, 9, BaseColor.BLACK);
+                foreach (var m in measurements)
+                {
+                    AddMeasurementToTable(table, m, cellFont);
+                }
+
+                document.Add(table);
+            }
+            else
+            {
+                Paragraph noMeasurements = new Paragraph("No measurements recorded.",
+                    FontFactory.GetFont(FontFactory.HELVETICA_OBLIQUE, 10, BaseColor.GRAY));
+                noMeasurements.SpacingBefore = 10;
+                document.Add(noMeasurements);
+            }
+
+            // Add reference scale information if available
+            if (isReferenceSet)
+            {
+                Paragraph scaleInfo = new Paragraph($"Reference Scale: 1 cm = {pixelToRealRatio:F2} pixels",
+                    FontFactory.GetFont(FontFactory.HELVETICA, 9, BaseColor.GRAY));
+                scaleInfo.SpacingBefore = 10;
+                document.Add(scaleInfo);
+            }
+
+            // Add footer
+            Paragraph footer = new Paragraph("Generated by Body Measurement Analysis Tool",
+                FontFactory.GetFont(FontFactory.HELVETICA_OBLIQUE, 8, BaseColor.LIGHT_GRAY));
+            footer.Alignment = Element.ALIGN_RIGHT;
+            footer.SpacingBefore = 20;
+            document.Add(footer);
+
+            document.Close();
+        }
+
+        private void AddTableHeaderCell(PdfPTable table, string text, iTextSharp.text.Font font, BaseColor bgColor)
+        {
+            PdfPCell cell = new PdfPCell(new Phrase(text, font));
+            cell.BackgroundColor = bgColor;
+            cell.HorizontalAlignment = Element.ALIGN_CENTER;
+            cell.Padding = 5;
+            table.AddCell(cell);
+        }
+
+        private void AddMeasurementToTable(PdfPTable table, Measurement m, iTextSharp.text.Font font)
+        {
+            // Type column
+            table.AddCell(new PdfPCell(new Phrase(m.Type.ToString(), font)) { Padding = 5 });
+
+            // Name column
+            table.AddCell(new PdfPCell(new Phrase(m.Name, font)) { Padding = 5 });
+
+            // Pixel Value column
+            string pixelValue = GetPixelValueString(m);
+            table.AddCell(new PdfPCell(new Phrase(pixelValue, font)) { Padding = 5, HorizontalAlignment = Element.ALIGN_RIGHT });
+
+            // Real Value column
+            string realValue = GetRealValueString(m);
+            table.AddCell(new PdfPCell(new Phrase(realValue, font)) { Padding = 5, HorizontalAlignment = Element.ALIGN_RIGHT });
+        }
+
+        private string GetPixelValueString(Measurement m)
+        {
+            switch (m.Type)
+            {
+                case MeasurementType.Line:
+                case MeasurementType.Distance:
+                case MeasurementType.ReferenceLine:
+                    double pixels = CalculateDistance(m.Start, m.End);
+                    return $"{pixels:F1} px";
+
+                case MeasurementType.Angle:
+                    double angle = CalculateAngle(m);
+                    return $"{angle:F1}°";
+
+                case MeasurementType.AngleWithAxis:
+                    double axisAngle = CalculateAngleWithAxis(m);
+                    return $"{axisAngle:F1}°";
+
+                case MeasurementType.Point:
+                    return $"({m.Start.X}, {m.Start.Y})";
+
+                default:
+                    return "-";
+            }
+        }
+
+        private string GetRealValueString(Measurement m)
+        {
+            if (!isReferenceSet && m.Type != MeasurementType.ReferenceLine)
+                return "-";
+
+            switch (m.Type)
+            {
+                case MeasurementType.Distance:
+                    double pixels = CalculateDistance(m.Start, m.End);
+                    double realUnits = pixels / pixelToRealRatio;
+                    return $"{realUnits:F2} cm";
+
+                case MeasurementType.ReferenceLine:
+                    double refPixels = CalculateDistance(m.Start, m.End);
+                    double refUnits = refPixels / pixelToRealRatio;
+                    return $"{refUnits:F2} cm (Reference)";
+
+                case MeasurementType.Angle:
+                case MeasurementType.AngleWithAxis:
+                    // Angles are the same in real world as in pixels
+                    return GetPixelValueString(m);
+
+                default:
+                    return "-";
+            }
+        }
+
+
         // Dialog for axis selection
         private class AxisSelectionDialog : Form
         {
@@ -1434,15 +1685,5 @@ namespace kinectProject
 
     }
 
-    // Program entry point
-    //internal static class Program
-    //{
-    //    [STAThread]
-    //    static void Main()
-    //    {
-    //        Application.EnableVisualStyles();
-    //        Application.SetCompatibleTextRenderingDefault(false);
-    //        Application.Run(new MainForm());
-    //    }
-    //}
+
 }
