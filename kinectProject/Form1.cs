@@ -338,14 +338,15 @@ namespace KinectProject
 
                 ToolStripStatusLabel statusLabel = new ToolStripStatusLabel
                 {
-                    Text = "Veuillez vous placer à 1-2 mètres du capteur pour une détection optimale.",
+                    Text = "Veuillez vous placer à ~2 mètres du capteur pour une détection optimale.",
                     ForeColor = Color.LightGray,
                     Font = new Font("Segoe UI", 9f)
                 };
 
                 ToolStripStatusLabel kinectStatus = new ToolStripStatusLabel
                 {
-                    Text = "Kinect: Connecté",
+                    //Text = "Kinect: Connecté",
+                    Text="",
                     ForeColor = Color.LightGreen,
                     Font = new Font("Segoe UI", 9f, FontStyle.Bold),
                     Alignment = ToolStripItemAlignment.Right
