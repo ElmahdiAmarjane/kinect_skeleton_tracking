@@ -9,8 +9,8 @@ namespace KinectProject
     public partial class MultiCurveViewer : Form
     {
         private List<SpineCurveData> allCurves = new List<SpineCurveData>();
-        private int curveHeight = 300; // Estimated height for each curve box
-        private int curveWidth = 400;  // Width for each curve box
+        private int curveHeight = 300;
+        private int curveWidth = 400;
 
         private int horizontalSpacing = 20;
         private int verticalSpacing = 20;
@@ -22,24 +22,25 @@ namespace KinectProject
         private const int ScrollStep = 50;
 
         // Interaction state
-        private int? activeCurveIndex = null;           // curve index being interacted with (dragging or selected)
-        private bool isDraggingRefLine = false;         // dragging vertical red reference line
-        private PointF? selectedPoint = null;           // selected/nearest point on currently hovered curve
+        private int? activeCurveIndex = null;
+        private bool isDraggingRefLine = false;
+        private PointF? selectedPoint = null;
         private int? selectedPointIndex = null;
 
-        // Per-curve manual reference and pixel positions
-        private Dictionary<int, float> manualZRefs = new Dictionary<int, float>(); // Z value in mm
-        private Dictionary<int, int> fixedXPixel = new Dictionary<int, int>();     // pixel X position of ref line
+        // Per-curve manual reference Z values (in mm - this is the source of truth)
+        private Dictionary<int, float> manualZRefs = new Dictionary<int, float>();
 
         // Fonts / pens
         private Font infoFont;
         private Font labelFont;
         private Pen axisPen = new Pen(Color.Gray, 1);
 
-        // Scaling constants borrowed from working CurveDataViewer behaviour
-        // Important: We use a fixed horizontal scale and DO NOT scale Y (to avoid distortion)
-        private const float OffsetXInsideBox = 50f; // same idea as CurveDataViewer offset
-        private const float ScaleX = 0.1f;          // same horizontal scale as working viewer (px per mm)
+        // Scaling constants
+        private const float OffsetXInsideBox = 50f;
+        private const float ScaleX = 0.1f; // pixels per mm
+
+        // Fine control step for keyboard (0.5mm as requested)
+        private const float FineControlStep = 0.5f; // mm
 
         public MultiCurveViewer()
         {
@@ -50,11 +51,9 @@ namespace KinectProject
             this.ForeColor = Color.White;
             this.KeyPreview = true;
 
-            // Resize handling
             this.ResizeBegin += (s, e) => { this.SuspendLayout(); };
             this.ResizeEnd += (s, e) => { this.ResumeLayout(true); this.Invalidate(); };
 
-            // Enable interactions
             EnableInteractiveFeatures();
         }
 
@@ -64,7 +63,7 @@ namespace KinectProject
             labelFont = new Font("Segoe UI", 8, FontStyle.Regular);
 
             this.ClientSize = new Size(900, 700);
-            this.Text = "Multi-Curve Viewer - Corrected Scaling + Interactive Ref Line";
+            this.Text = "Multi-Curve Viewer - High Precision Control (0.5mm)";
             this.Padding = new Padding(10);
 
             this.MouseWheel += MultiCurveViewer_MouseWheel;
@@ -74,9 +73,7 @@ namespace KinectProject
         public void LoadCurves(List<SpineCurveData> curves)
         {
             allCurves = curves ?? new List<SpineCurveData>();
-            // Reset per-curve refs
             manualZRefs.Clear();
-            fixedXPixel.Clear();
             CalculateLayout();
             Invalidate();
         }
@@ -132,105 +129,86 @@ namespace KinectProject
                 int xBase = 20 + col * (curveWidth + horizontalSpacing) - horizontalOffset;
                 int yBase = 20 + row * (curveHeight + verticalSpacing) - verticalOffset;
 
-                // Only draw if visible
                 if (xBase + curveWidth < 0 || xBase > ClientSize.Width ||
                     yBase + curveHeight < 0 || yBase > ClientSize.Height) continue;
 
                 DrawCurveBox(g, curveData, i, xBase, yBase);
             }
 
-            // Draw scroll indicators if necessary
             if (maxHorizontalOffset > 0 || maxVerticalOffset > 0)
             {
                 DrawScrollIndicators(g);
             }
+
+            // Draw control hints
+            DrawControlHints(g);
         }
 
         private void DrawCurveBox(Graphics g, SpineCurveData curveData, int curveIndex, int xBase, int yBase)
         {
-            // Drawing rectangle for this curve
             Rectangle curveArea = new Rectangle(xBase + 5, yBase + 25, curveWidth - 10, curveHeight - 35);
 
-            // Background and border
             g.FillRectangle(Brushes.Black, curveArea);
             g.DrawRectangle(Pens.Gray, curveArea);
 
-            // Info title
             string info = $"[{curveIndex + 1}] {curveData.CaptureTime:yyyy-MM-dd HH:mm:ss}  Angle: {curveData.SpineAngle:F1}°";
             g.DrawString(info, infoFont, Brushes.LightGray, xBase + 10, yBase + 5);
 
-            // Prepare points (convert)
             var pts = curveData.Points.ConvertAll(p => p.ToPointF());
             if (pts.Count < 2) return;
 
-            // We'll use a fixed horizontal scaling and keep Y as-is (to match CurveDataViewer)
-            float offsetX = curveArea.Left + OffsetXInsideBox; // provide 50px margin inside the box
+            float offsetX = curveArea.Left + OffsetXInsideBox;
             float scaleX = ScaleX;
 
-            // Draw vertical/horizontal axis lines (center-ish)
-            float axisX = offsetX - 10; // small axis line to the left of curve
+            // Draw axes
+            float axisX = offsetX - 10;
             g.DrawLine(axisPen, axisX, curveArea.Top, axisX, curveArea.Bottom);
             g.DrawLine(axisPen, curveArea.Left, curveArea.Bottom - 1, curveArea.Right, curveArea.Bottom - 1);
 
-            // Draw curve lines using original (good) scaling approach
+            // Draw curve
             Color[] palette = new Color[] { Color.Cyan, Color.LightGreen, Color.Orange, Color.Violet, Color.Yellow, Color.Pink, Color.LightBlue };
             using (Pen curvePen = new Pen(palette[curveIndex % palette.Length], 2))
             {
                 for (int k = 1; k < pts.Count; k++)
                 {
-                    if (float.IsNaN(pts[k - 1].X) || float.IsNaN(pts[k - 1].Y)
-                        || float.IsNaN(pts[k].X) || float.IsNaN(pts[k].Y)) continue;
+                    if (float.IsNaN(pts[k - 1].X) || float.IsNaN(pts[k - 1].Y) ||
+                        float.IsNaN(pts[k].X) || float.IsNaN(pts[k].Y)) continue;
 
                     float x1 = offsetX + pts[k - 1].X * scaleX;
-                    float y1 = curveArea.Top + pts[k - 1].Y; // keep Y as originally (like CurveDataViewer)
+                    float y1 = curveArea.Top + pts[k - 1].Y;
                     float x2 = offsetX + pts[k].X * scaleX;
                     float y2 = curveArea.Top + pts[k].Y;
 
-                    // Clip drawing to curveArea
                     g.SetClip(curveArea);
-                    try
-                    {
-                        g.DrawLine(curvePen, x1, y1, x2, y2);
-                    }
-                    catch (ArgumentException) { /* ignore invalid lines */ }
+                    try { g.DrawLine(curvePen, x1, y1, x2, y2); }
+                    catch (ArgumentException) { }
                     g.ResetClip();
                 }
             }
 
-            // Determine reference Z (either manual or automatic - max Z)
+            // Get reference Z value (stored in mm)
             float autoZRef = pts.Any() ? pts[curveData.MaxZIndex].X : 0f;
-            float zRef = manualZRefs.ContainsKey(curveIndex) && manualZRefs[curveIndex] > 0 ? manualZRefs[curveIndex] : autoZRef;
+            float zRef = manualZRefs.ContainsKey(curveIndex) ? manualZRefs[curveIndex] : autoZRef;
 
-            // Determine pixel X for reference line (store if not present)
-            if (!fixedXPixel.ContainsKey(curveIndex))
-            {
-                int pixelX = (int)(offsetX + zRef * scaleX);
-                fixedXPixel[curveIndex] = pixelX;
-            }
+            // Convert Z value to pixel position for drawing
+            float refXFloat = offsetX + zRef * scaleX;
+            int refX = (int)Math.Round(refXFloat);
 
-            // If a manualZRef exists and is >0, use it to compute pixel
-            if (manualZRefs.ContainsKey(curveIndex) && manualZRefs[curveIndex] > 0)
-            {
-                fixedXPixel[curveIndex] = (int)(offsetX + manualZRefs[curveIndex] * scaleX);
-            }
-            else
-            {
-                // otherwise use auto (max)
-                fixedXPixel[curveIndex] = (int)(offsetX + zRef * scaleX);
-            }
-
-            // Draw dashed red reference line inside the box
-            int refX = fixedXPixel[curveIndex];
+            // Draw reference line
             using (Pen refPen = new Pen(Color.Red, 2) { DashStyle = System.Drawing.Drawing2D.DashStyle.Dash })
             {
-                // Clip and draw only inside curve area
                 g.SetClip(curveArea);
-                g.DrawLine(refPen, refX, curveArea.Top, refX, curveArea.Bottom);
+                g.DrawLine(refPen, refXFloat, curveArea.Top, refXFloat, curveArea.Bottom);
                 g.ResetClip();
             }
-            g.DrawString($"Ref Z: {zRef:F1} mm", labelFont, Brushes.Red, Math.Min(refX + 5, curveArea.Right - 60), curveArea.Top + 5);
 
-            // Draw max point marker (from curveData.MaxZIndex)
+            // Reference label
+            string refLabel = manualZRefs.ContainsKey(curveIndex)
+                ? $"Ref Z: {zRef:F2} mm (manual)"
+                : $"Ref Z: {zRef:F2} mm (auto)";
+            g.DrawString(refLabel, labelFont, Brushes.Red, Math.Min(refXFloat + 5, curveArea.Right - 100), curveArea.Top + 5);
+
+            // Draw max point marker
             if (curveData.MaxZIndex >= 0 && curveData.MaxZIndex < pts.Count)
             {
                 var maxPt = pts[curveData.MaxZIndex];
@@ -239,28 +217,36 @@ namespace KinectProject
                 g.FillEllipse(Brushes.Red, maxXpix - 4, maxYpix - 4, 8, 8);
             }
 
-            // If there's a selected point belonging to this curve, draw it and the lateral distance
+            // Draw selected point and distance
             if (selectedPoint.HasValue && activeCurveIndex.HasValue && activeCurveIndex.Value == curveIndex)
             {
                 var sp = selectedPoint.Value;
                 float spXpix = offsetX + sp.X * scaleX;
                 float spYpix = curveArea.Top + sp.Y;
 
-                // draw marker
                 g.FillEllipse(Brushes.Yellow, spXpix - 4, spYpix - 4, 8, 8);
 
-                // compute lateral distance in mm between the selected point and zRef
                 float lateralDistance = Math.Abs(sp.X - zRef);
+                string label = $"Z: {sp.X:F2} mm  Δ: {lateralDistance:F2} mm";
 
-                string label = $"Z: {sp.X:F1} mm  Δ: {lateralDistance:F1} mm";
-                // draw label near the point, keep inside box
-                float labelX = Math.Min(spXpix + 8, curveArea.Right - 90);
+                float labelX = Math.Min(spXpix + 8, curveArea.Right - 120);
                 float labelY = Math.Max(spYpix - 30, curveArea.Top + 5);
                 g.DrawString(label, labelFont, Brushes.Yellow, labelX, labelY);
             }
 
-            // Draw box border again to ensure markers are visible
             g.DrawRectangle(Pens.Gray, curveArea);
+        }
+
+        private void DrawControlHints(Graphics g)
+        {
+            string hint = activeCurveIndex.HasValue
+                ? "Selected curve: Use ← → keys (0.5mm) or Shift+← → (5mm) to adjust ref line | R: Reset | Right-click: Deselect"
+                : "Click curve to select | Drag red line to adjust reference";
+
+            using (Brush hintBrush = new SolidBrush(Color.FromArgb(200, 255, 255, 255)))
+            {
+                g.DrawString(hint, labelFont, hintBrush, 10, ClientSize.Height - 35);
+            }
         }
 
         private void EnableInteractiveFeatures()
@@ -275,7 +261,6 @@ namespace KinectProject
         {
             if (e.Button != MouseButtons.Left) return;
 
-            // Check if click is within any curve area, and if near its ref line then start dragging
             int curvesPerRow = Math.Max(1, (ClientSize.Width - 40) / (curveWidth + horizontalSpacing));
 
             for (int i = 0; i < allCurves.Count; i++)
@@ -290,14 +275,18 @@ namespace KinectProject
                 if (e.X >= curveArea.Left && e.X <= curveArea.Right &&
                     e.Y >= curveArea.Top && e.Y <= curveArea.Bottom)
                 {
-                    // click inside this curve area
                     activeCurveIndex = i;
 
-                    // compute offsetX for this box to compare with fixedXPixel
-                    float offsetX = curveArea.Left + OffsetXInsideBox;
-                    int refPixelX = fixedXPixel.ContainsKey(i) ? fixedXPixel[i] : (int)(offsetX + allCurves[i].Points[allCurves[i].MaxZIndex].X * ScaleX);
+                    // Get current Z ref value
+                    var pts = allCurves[i].Points.ConvertAll(p => p.ToPointF());
+                    float autoZRef = pts.Any() ? pts[allCurves[i].MaxZIndex].X : 0f;
+                    float currentZRef = manualZRefs.ContainsKey(i) ? manualZRefs[i] : autoZRef;
 
-                    // If click is close to the ref line (within 8 px), start dragging
+                    // Convert to pixel position
+                    float offsetX = curveArea.Left + OffsetXInsideBox;
+                    float refPixelX = offsetX + currentZRef * ScaleX;
+
+                    // Check if clicking near reference line
                     if (Math.Abs(e.X - refPixelX) <= 8)
                     {
                         isDraggingRefLine = true;
@@ -305,15 +294,14 @@ namespace KinectProject
                     }
                     else
                     {
-                        // Not clicking the ref line: select nearest point to the click
                         SelectNearestPointInCurve(i, new Point(e.X, e.Y));
                     }
 
-                    return; // handled
+                    Invalidate();
+                    return;
                 }
             }
 
-            // click outside any curve
             activeCurveIndex = null;
             selectedPoint = null;
             selectedPointIndex = null;
@@ -322,12 +310,10 @@ namespace KinectProject
 
         private void MultiCurveViewer_MouseMove(object sender, MouseEventArgs e)
         {
-            // If dragging the reference line for an active curve
             if (isDraggingRefLine && activeCurveIndex.HasValue)
             {
                 int i = activeCurveIndex.Value;
 
-                // compute the curve area for this index
                 int curvesPerRow = Math.Max(1, (ClientSize.Width - 40) / (curveWidth + horizontalSpacing));
                 int row = i / curvesPerRow;
                 int col = i % curvesPerRow;
@@ -337,25 +323,19 @@ namespace KinectProject
 
                 float offsetX = curveArea.Left + OffsetXInsideBox;
 
-                // Clamp the mouse X to be inside the curve area
+                // Clamp mouse X to curve area
                 int clampedX = Math.Max(curveArea.Left + 1, Math.Min(curveArea.Right - 1, e.X));
-                fixedXPixel[i] = clampedX;
 
-                // Convert back to Z value (mm)
+                // Convert pixel position to Z value (mm) - this maintains precision
                 float newZ = (clampedX - offsetX) / ScaleX;
-                manualZRefs[i] = newZ;
 
-                // update selection distance if any
-                if (selectedPoint.HasValue && activeCurveIndex == i)
-                {
-                    // nothing special: Draw will compute lateral distance
-                }
+                // Store the Z value directly (not the pixel position)
+                manualZRefs[i] = newZ;
 
                 Invalidate();
                 return;
             }
 
-            // If not dragging, update hovered/closest point for visual feedback (only within curve area)
             UpdateHoveredPoint(new Point(e.X, e.Y));
         }
 
@@ -371,8 +351,6 @@ namespace KinectProject
 
         private void MultiCurveViewer_MouseClick(object sender, MouseEventArgs e)
         {
-            // Left-click handled in MouseDown for selection and drag start.
-            // Middle or right-click: clear selection
             if (e.Button == MouseButtons.Right)
             {
                 selectedPoint = null;
@@ -384,7 +362,8 @@ namespace KinectProject
 
         private void UpdateHoveredPoint(Point mouseLocation)
         {
-            // Find which curve area mouse is over and compute nearest point (within threshold)
+            if (isDraggingRefLine) return;
+
             int curvesPerRow = Math.Max(1, (ClientSize.Width - 40) / (curveWidth + horizontalSpacing));
             bool foundAny = false;
 
@@ -402,11 +381,10 @@ namespace KinectProject
                     continue;
                 }
 
-                // Mouse is inside this curve box: search nearest point
                 var pts = allCurves[i].Points.ConvertAll(p => p.ToPointF());
                 float offsetX = curveArea.Left + OffsetXInsideBox;
 
-                float minDistance = 15f; // pixel threshold
+                float minDistance = 15f;
                 PointF? bestPt = null;
                 int bestIdx = -1;
 
@@ -440,16 +418,9 @@ namespace KinectProject
 
             if (!foundAny)
             {
-                // Clear selection feedback if not hovering close to any point
-                // (But we keep manual ref line state)
-                // Do not clear selectedPoint if user is dragging refline
-                if (!isDraggingRefLine)
-                {
-                    selectedPoint = null;
-                    selectedPointIndex = null;
-                    // activeCurveIndex = null; // keep activeCurveIndex to preserve which curve ref being manipulated
-                    Invalidate();
-                }
+                selectedPoint = null;
+                selectedPointIndex = null;
+                Invalidate();
             }
         }
 
@@ -502,7 +473,6 @@ namespace KinectProject
 
         private void DrawScrollIndicators(Graphics g)
         {
-            // Horizontal
             if (maxHorizontalOffset > 0)
             {
                 int scrollWidth = ClientSize.Width - 80;
@@ -516,7 +486,6 @@ namespace KinectProject
                 g.FillRectangle(Brushes.LightGray, thumbX, scrollY, thumbWidth, 10);
             }
 
-            // Vertical
             if (maxVerticalOffset > 0)
             {
                 int scrollHeight = ClientSize.Height - 80;
@@ -540,6 +509,44 @@ namespace KinectProject
 
         private void MultiCurveViewer_KeyDown(object sender, KeyEventArgs e)
         {
+            // Reference line adjustment for active curve
+            if (activeCurveIndex.HasValue && activeCurveIndex.Value >= 0 && activeCurveIndex.Value < allCurves.Count)
+            {
+                var pts = allCurves[activeCurveIndex.Value].Points.ConvertAll(p => p.ToPointF());
+                float autoZRef = pts.Any() ? pts[allCurves[activeCurveIndex.Value].MaxZIndex].X : 0f;
+                float currentZRef = manualZRefs.ContainsKey(activeCurveIndex.Value)
+                    ? manualZRefs[activeCurveIndex.Value]
+                    : autoZRef;
+
+                float step = e.Shift ? FineControlStep * 10 : FineControlStep; // Shift = 5mm, normal = 0.5mm
+
+                switch (e.KeyCode)
+                {
+                    case Keys.Left:
+                        manualZRefs[activeCurveIndex.Value] = currentZRef - step;
+                        Invalidate();
+                        e.Handled = true;
+                        return;
+
+                    case Keys.Right:
+                        manualZRefs[activeCurveIndex.Value] = currentZRef + step;
+                        Invalidate();
+                        e.Handled = true;
+                        return;
+
+                    case Keys.R:
+                        // Reset to automatic reference
+                        if (manualZRefs.ContainsKey(activeCurveIndex.Value))
+                        {
+                            manualZRefs.Remove(activeCurveIndex.Value);
+                            Invalidate();
+                        }
+                        e.Handled = true;
+                        return;
+                }
+            }
+
+            // Scrolling
             switch (e.KeyCode)
             {
                 case Keys.Up:
@@ -548,11 +555,11 @@ namespace KinectProject
                 case Keys.Down:
                     verticalOffset = Math.Min(maxVerticalOffset, verticalOffset + ScrollStep);
                     break;
-                case Keys.Left:
-                    horizontalOffset = Math.Max(0, horizontalOffset - ScrollStep);
+                case Keys.PageUp:
+                    verticalOffset = Math.Max(0, verticalOffset - ClientSize.Height / 2);
                     break;
-                case Keys.Right:
-                    horizontalOffset = Math.Min(maxHorizontalOffset, horizontalOffset + ScrollStep);
+                case Keys.PageDown:
+                    verticalOffset = Math.Min(maxVerticalOffset, verticalOffset + ClientSize.Height / 2);
                     break;
                 case Keys.Home:
                     verticalOffset = 0;
@@ -574,7 +581,6 @@ namespace KinectProject
         {
             base.OnMouseDown(e);
 
-            // Click on scrollbars handling (optional)
             int scrollWidth = 10;
             int scrollX = ClientSize.Width - scrollWidth - 5;
             if (e.X >= scrollX && e.X <= scrollX + scrollWidth)
@@ -617,10 +623,6 @@ namespace KinectProject
         }
     }
 
-    // Dummy SpineCurveData for compilation example:
-    // In your project you already have this class; remove this one if duplicate.
-    
-    // SimplePoint used as placeholder for your actual point class.
     public class SimplePoint
     {
         public float X { get; set; }

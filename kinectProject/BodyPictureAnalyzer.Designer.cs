@@ -69,11 +69,6 @@
             this.pictureBox1.SizeMode = System.Windows.Forms.PictureBoxSizeMode.Zoom;
             this.pictureBox1.TabIndex = 0;
             this.pictureBox1.TabStop = false;
-          //  this.pictureBox1.Paint += new System.Windows.Forms.PaintEventHandler(this.pictureBox1_Paint);
-         //   this.pictureBox1.MouseClick += new System.Windows.Forms.MouseEventHandler(this.pictureBox1_MouseClick);
-         //   this.pictureBox1.MouseDown += new System.Windows.Forms.MouseEventHandler(this.pictureBox1_MouseDown);
-        //    this.pictureBox1.MouseMove += new System.Windows.Forms.MouseEventHandler(this.pictureBox1_MouseMove);
-        //    this.pictureBox1.MouseUp += new System.Windows.Forms.MouseEventHandler(this.pictureBox1_MouseUp);
             // 
             // panelMeasurements
             // 
@@ -128,7 +123,6 @@
             this.panelTop.Name = "panelTop";
             this.panelTop.Size = new System.Drawing.Size(918, 60);
             this.panelTop.TabIndex = 3;
-         //   this.panelTop.Paint += new System.Windows.Forms.PaintEventHandler(this.panelTop_Paint);
             // 
             // btnImport
             // 
@@ -143,7 +137,6 @@
             this.btnImport.TabIndex = 0;
             this.btnImport.Text = "IMPORT BODY PICTURE";
             this.btnImport.UseVisualStyleBackColor = false;
-        //    this.btnImport.Click += new System.EventHandler(this.btnImport_Click);
             // 
             // btnSwitchMode
             // 
@@ -157,7 +150,6 @@
             this.btnSwitchMode.TabIndex = 1;
             this.btnSwitchMode.Text = "SWITCH MODE";
             this.btnSwitchMode.UseVisualStyleBackColor = false;
-        //    this.btnSwitchMode.Click += new System.EventHandler(this.btnSwitchMode_Click);
             // 
             // btnCalculate
             // 
@@ -171,7 +163,6 @@
             this.btnCalculate.TabIndex = 2;
             this.btnCalculate.Text = "CALCULATE";
             this.btnCalculate.UseVisualStyleBackColor = false;
-        //    this.btnCalculate.Click += new System.EventHandler(this.btnCalculate_Click);
             // 
             // btnClear
             // 
@@ -185,7 +176,6 @@
             this.btnClear.TabIndex = 3;
             this.btnClear.Text = "CLEAR ALL";
             this.btnClear.UseVisualStyleBackColor = false;
-            //this.btnClear.Click += new System.EventHandler(this.btnClear_Click);
             // 
             // lblMode
             // 
@@ -211,7 +201,6 @@
             this.btnSetReferenceScale.TabIndex = 4;
             this.btnSetReferenceScale.Text = "SET REFERENCE SCALE";
             this.btnSetReferenceScale.UseVisualStyleBackColor = false;
-           // this.btnSetReferenceScale.Click += new System.EventHandler(this.btnSetReferenceScale_Click);
             // 
             // btnShowPlan
             // 
@@ -225,7 +214,6 @@
             this.btnShowPlan.TabIndex = 5;
             this.btnShowPlan.Text = "Show/Hide plan";
             this.btnShowPlan.UseVisualStyleBackColor = false;
-          //  this.btnShowPlan.Click += new System.EventHandler(this.btnTogglePlan_Click);
             // 
             // btnAnglePlanMode
             // 
@@ -239,7 +227,6 @@
             this.btnAnglePlanMode.TabIndex = 6;
             this.btnAnglePlanMode.Text = "Angle PLan mode";
             this.btnAnglePlanMode.UseVisualStyleBackColor = false;
-         //   this.btnAnglePlanMode.Click += new System.EventHandler(this.btnAngleWithPlan_Click);
             // 
             // btnDeleteMode
             // 
@@ -253,7 +240,6 @@
             this.btnDeleteMode.TabIndex = 7;
             this.btnDeleteMode.Text = "Delete";
             this.btnDeleteMode.UseVisualStyleBackColor = false;
-           // this.btnDeleteMode.Click += new System.EventHandler(this.btnDeleteMode_Click);
             // 
             // btnOnePointMode
             // 
@@ -267,7 +253,6 @@
             this.btnOnePointMode.TabIndex = 7;
             this.btnOnePointMode.Text = "Point Mode";
             this.btnOnePointMode.UseVisualStyleBackColor = false;
-         //   this.btnOnePointMode.Click += new System.EventHandler(this.btnOnePointMode_Click);
             // 
             // BodyPictureAnalyzer
             // 
@@ -291,7 +276,7 @@
             this.Name = "BodyPictureAnalyzer";
             this.StartPosition = System.Windows.Forms.FormStartPosition.CenterScreen;
             this.Text = "Professional Body Measurement Analyzer";
-          //  this.Load += new System.EventHandler(this.BodyPictureAnalyzer_Load);
+            this.Load += new System.EventHandler(this.BodyPictureAnalyzer_Load);
             ((System.ComponentModel.ISupportInitialize)(this.pictureBox1)).EndInit();
             this.panelMeasurements.ResumeLayout(false);
             this.statusStrip1.ResumeLayout(false);

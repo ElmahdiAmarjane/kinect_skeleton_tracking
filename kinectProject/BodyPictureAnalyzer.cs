@@ -1,5 +1,4 @@
-﻿
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
@@ -16,7 +15,7 @@ namespace kinectProject
     {
         // Enums
         private enum ToolMode { None, Line, Point, Angle, AngleWithAxis, Distance, Reference }
-        private enum EditMode { None, Move, Delete }
+        private enum EditMode { None, Move, Delete, Rename, Normal }
         private enum AxisType { X, Y }
 
         // Measurement structures
@@ -29,8 +28,9 @@ namespace kinectProject
             public bool IsSelected;
             public AxisType? Axis; // For angle measurements
             public Point? Vertex; // For angle measurements with two segments
+            public int ID; // Unique ID for each measurement
 
-            public Measurement(Point start, Point end, string name, MeasurementType type)
+            public Measurement(Point start, Point end, string name, MeasurementType type, int id)
             {
                 Start = start;
                 End = end;
@@ -39,6 +39,7 @@ namespace kinectProject
                 IsSelected = false;
                 Axis = null;
                 Vertex = null;
+                ID = id;
             }
         }
 
@@ -46,11 +47,12 @@ namespace kinectProject
 
         // Application state
         private ToolMode currentTool = ToolMode.None;
-        private EditMode currentEditMode = EditMode.None;
+        private EditMode currentEditMode = EditMode.Normal;
         private List<Measurement> measurements = new List<Measurement>();
         private System.Drawing.Image originalImage;
         private Point? currentStartPoint = null;
         private int measurementCounter = 1;
+        private int idCounter = 1;
         private float pixelToRealRatio = 1.0f;
         private bool isReferenceSet = false;
         private bool showGrid = true;
@@ -64,16 +66,19 @@ namespace kinectProject
         private Point? angleVertex = null;
         private bool isSettingReference = false;
         private Point? angleFirstPoint = null;
+        private Point? hoverPoint = null;
+        private string hoverMeasurementName = "";
+        private Measurement? hoverMeasurement = null;
 
         // UI Controls
         private PictureBox pictureBox;
         private ToolStrip toolStrip;
         private StatusStrip statusStrip;
-        private ListBox measurementsList;
+        private ListView measurementsList;
 
         public BodyPictureAnalyzer()
         {
-           // InitializeComponent();
+            // InitializeComponent();
             SetupUI();
             UpdateStatus("Ready to import an image");
         }
@@ -82,36 +87,44 @@ namespace kinectProject
         {
             // Main form setup
             this.Text = "Advanced Image Measurement Tool";
-            this.Size = new Size(1000, 700);
+            this.Size = new Size(1200, 800);
             this.DoubleBuffered = true;
+            this.BackColor = Color.FromArgb(45, 45, 48);
+            this.ForeColor = Color.White;
 
             // Toolstrip setup
             toolStrip = new ToolStrip();
             toolStrip.Dock = DockStyle.Top;
+            toolStrip.BackColor = Color.FromArgb(62, 62, 64);
+            toolStrip.ForeColor = Color.White;
 
             // Toolstrip buttons
-            AddToolButton("Import Image", BtnImport_Click);
+            AddToolButton("📁 Import Image", BtnImport_Click);
             AddToolSeparator();
 
-            AddToolButton("Line Tool", (s, e) => SetToolMode(ToolMode.Line));
-            AddToolButton("Point Tool", (s, e) => SetToolMode(ToolMode.Point));
-            AddToolButton("Angle Tool", (s, e) => SetToolMode(ToolMode.Angle));
-            AddToolButton("Angle with Axis", (s, e) => SetToolMode(ToolMode.AngleWithAxis));
-            AddToolButton("Distance Tool", (s, e) => SetToolMode(ToolMode.Distance));
-            AddToolButton("Set Reference", (s, e) => SetToolMode(ToolMode.Reference));
+            AddToolButton("🔍 Normal Mode", (s, e) => SetEditMode(EditMode.Normal));
+            AddToolSeparator();
+
+            AddToolButton("📏 Line Tool", (s, e) => SetToolMode(ToolMode.Line));
+            AddToolButton("• Point Tool", (s, e) => SetToolMode(ToolMode.Point));
+            AddToolButton("📐 Angle Tool", (s, e) => SetToolMode(ToolMode.Angle));
+            AddToolButton("📊 Angle with Axis", (s, e) => SetToolMode(ToolMode.AngleWithAxis));
+            AddToolButton("📐 Distance Tool", (s, e) => SetToolMode(ToolMode.Distance));
+            AddToolButton("📏 Set Reference", (s, e) => SetToolMode(ToolMode.Reference));
 
             AddToolSeparator();
 
-            AddToolButton("Move Mode", (s, e) => SetEditMode(EditMode.Move));
-            AddToolButton("Delete Mode", (s, e) => SetEditMode(EditMode.Delete));
-            AddToolButton("Clear All", BtnClear_Click);
-            AddToolButton("Toggle Grid", BtnToggleGrid_Click);
-            AddToolButton("Export PDF", (s, e) => ExportToPdf());
+            AddToolButton("✏️ Move Mode", (s, e) => SetEditMode(EditMode.Move));
+            AddToolButton("🗑️ Delete Mode", (s, e) => SetEditMode(EditMode.Delete));
+            AddToolButton("🏷️ Rename Mode", (s, e) => SetEditMode(EditMode.Rename));
+            AddToolButton("🧹 Clear All", BtnClear_Click);
+            AddToolButton("🔲 Toggle Grid", BtnToggleGrid_Click);
+            AddToolButton("📄 Export PDF", (s, e) => ExportToPdf());
 
             // Picture box setup
             pictureBox = new PictureBox();
             pictureBox.Dock = DockStyle.Fill;
-            pictureBox.BackColor = Color.DarkGray;
+            pictureBox.BackColor = Color.FromArgb(37, 37, 38);
             pictureBox.BorderStyle = BorderStyle.FixedSingle;
             pictureBox.SizeMode = PictureBoxSizeMode.Zoom;
             pictureBox.MouseClick += PictureBox_MouseClick;
@@ -119,16 +132,37 @@ namespace kinectProject
             pictureBox.MouseMove += PictureBox_MouseMove;
             pictureBox.MouseUp += PictureBox_MouseUp;
             pictureBox.Paint += PictureBox_Paint;
+            pictureBox.MouseLeave += (s, e) => {
+                hoverPoint = null;
+                hoverMeasurement = null;
+                pictureBox.Invalidate();
+            };
 
-            // Measurements list
-            measurementsList = new ListBox();
+            // Measurements list (ListView for professional look)
+            measurementsList = new ListView();
             measurementsList.Dock = DockStyle.Right;
-            measurementsList.Width = 250;
+            measurementsList.Width = 350;
+            measurementsList.BackColor = Color.FromArgb(37, 37, 38);
+            measurementsList.ForeColor = Color.White;
+            measurementsList.BorderStyle = BorderStyle.FixedSingle;
+            measurementsList.View = View.Details;
+            measurementsList.FullRowSelect = true;
+            measurementsList.GridLines = true;
+            measurementsList.HeaderStyle = ColumnHeaderStyle.Nonclickable;
+
+            // Add columns
+            measurementsList.Columns.Add("ID", 50);
+            measurementsList.Columns.Add("Type", 80);
+            measurementsList.Columns.Add("Name", 80);
+            measurementsList.Columns.Add("Value", 120);
+
             measurementsList.SelectedIndexChanged += MeasurementsList_SelectedIndexChanged;
 
             // Status strip
             statusStrip = new StatusStrip();
             statusStrip.Dock = DockStyle.Bottom;
+            statusStrip.BackColor = Color.FromArgb(62, 62, 64);
+            statusStrip.ForeColor = Color.White;
 
             // Add controls to form
             this.Controls.Add(pictureBox);
@@ -141,12 +175,18 @@ namespace kinectProject
         {
             var button = new ToolStripButton(text);
             button.Click += handler;
+            button.BackColor = Color.FromArgb(62, 62, 64);
+            button.ForeColor = Color.White;
+            button.MouseEnter += (s, e) => { button.BackColor = Color.FromArgb(87, 87, 90); };
+            button.MouseLeave += (s, e) => { button.BackColor = Color.FromArgb(62, 62, 64); };
             toolStrip.Items.Add(button);
         }
 
         private void AddToolSeparator()
         {
-            toolStrip.Items.Add(new ToolStripSeparator());
+            var separator = new ToolStripSeparator();
+            separator.ForeColor = Color.Gray;
+            toolStrip.Items.Add(separator);
         }
 
         private void SetToolMode(ToolMode mode)
@@ -181,12 +221,28 @@ namespace kinectProject
             angleVertex = null;
             angleFirstPoint = null;
 
-            string statusText = mode == EditMode.Delete ?
-                "Delete Mode: Click on measurement to delete" :
-                "Move Mode: Click and drag to move measurement";
+            string statusText = "";
+            switch (mode)
+            {
+                case EditMode.Normal:
+                    statusText = "Normal Mode: Hover over measurements to see details";
+                    pictureBox.Cursor = Cursors.Default;
+                    break;
+                case EditMode.Delete:
+                    statusText = "Delete Mode: Click on measurement to delete";
+                    pictureBox.Cursor = Cursors.No;
+                    break;
+                case EditMode.Move:
+                    statusText = "Move Mode: Click and drag to move measurement";
+                    pictureBox.Cursor = Cursors.Hand;
+                    break;
+                case EditMode.Rename:
+                    statusText = "Rename Mode: Click on measurement to rename";
+                    pictureBox.Cursor = Cursors.UpArrow;
+                    break;
+            }
 
             UpdateStatus(statusText);
-            pictureBox.Cursor = mode == EditMode.Delete ? Cursors.No : Cursors.Hand;
             DeselectAllMeasurements();
         }
 
@@ -216,6 +272,7 @@ namespace kinectProject
                         measurements.Clear();
                         measurementsList.Items.Clear();
                         measurementCounter = 1;
+                        idCounter = 1;
                         isReferenceSet = false;
                         pixelToRealRatio = 1.0f;
                         isSettingReference = false;
@@ -237,6 +294,7 @@ namespace kinectProject
             measurements.Clear();
             measurementsList.Items.Clear();
             measurementCounter = 1;
+            idCounter = 1;
             currentStartPoint = null;
             angleVertex = null;
             angleFirstPoint = null;
@@ -257,17 +315,24 @@ namespace kinectProject
         {
             DeselectAllMeasurements();
 
-            if (measurementsList.SelectedIndex >= 0 && measurementsList.SelectedIndex < measurements.Count)
+            if (measurementsList.SelectedItems.Count > 0)
             {
-                Measurement m = measurements[measurementsList.SelectedIndex];
-                m.IsSelected = true;
-                measurements[measurementsList.SelectedIndex] = m;
-                selectedMeasurementIndex = measurementsList.SelectedIndex;
-                selectedMeasurement = m;
+                int selectedId = int.Parse(measurementsList.SelectedItems[0].Text);
+                int index = measurements.FindIndex(m => m.ID == selectedId);
+
+                if (index >= 0)
+                {
+                    Measurement m = measurements[index];
+                    m.IsSelected = true;
+                    measurements[index] = m;
+                    selectedMeasurementIndex = index;
+                    selectedMeasurement = m;
+                }
             }
 
             pictureBox.Invalidate();
         }
+
         private void PictureBox_MouseClick(object sender, MouseEventArgs e)
         {
             if (pictureBox.Image == null) return;
@@ -286,8 +351,8 @@ namespace kinectProject
                 HandleMeasurementCreation(e.Location);
             }
 
-            // Handle selection for moving or deleting
-            if (currentEditMode != EditMode.None && e.Button == MouseButtons.Left)
+            // Handle selection for moving, deleting, or renaming
+            if (currentEditMode != EditMode.None && currentEditMode != EditMode.Normal && e.Button == MouseButtons.Left)
             {
                 HandleSelection(e.Location);
             }
@@ -309,7 +374,8 @@ namespace kinectProject
                             currentStartPoint.Value,
                             location,
                             $"L{measurementCounter++}",
-                            MeasurementType.Line));
+                            MeasurementType.Line,
+                            idCounter++));
                         currentStartPoint = null;
                         UpdateMeasurementsList();
                         pictureBox.Invalidate();
@@ -321,7 +387,8 @@ namespace kinectProject
                         location,
                         location,
                         $"P{measurementCounter++}",
-                        MeasurementType.Point));
+                        MeasurementType.Point,
+                        idCounter++));
                     UpdateMeasurementsList();
                     pictureBox.Invalidate();
                     break;
@@ -340,11 +407,13 @@ namespace kinectProject
                     else
                     {
                         // Create angle measurement with two segments
+                        int angleId = idCounter++;
                         Measurement firstSegment = new Measurement(
                             angleVertex.Value,
                             angleFirstPoint.Value,
                             $"A{measurementCounter}",
-                            MeasurementType.Angle);
+                            MeasurementType.Angle,
+                            angleId);
                         firstSegment.Vertex = angleVertex.Value;
                         measurements.Add(firstSegment);
 
@@ -352,7 +421,8 @@ namespace kinectProject
                             angleVertex.Value,
                             location,
                             $"A{measurementCounter}",
-                            MeasurementType.Angle);
+                            MeasurementType.Angle,
+                            angleId);
                         secondSegment.Vertex = angleVertex.Value;
                         measurements.Add(secondSegment);
 
@@ -364,6 +434,7 @@ namespace kinectProject
                         pictureBox.Invalidate();
                     }
                     break;
+
                 case ToolMode.AngleWithAxis:
                     if (currentStartPoint == null)
                     {
@@ -377,7 +448,8 @@ namespace kinectProject
                             currentStartPoint.Value,
                             location,
                             $"AA{measurementCounter++}",
-                            MeasurementType.AngleWithAxis));
+                            MeasurementType.AngleWithAxis,
+                            idCounter++));
 
                         // Ask for axis reference
                         var axisDialog = new AxisSelectionDialog();
@@ -407,7 +479,8 @@ namespace kinectProject
                             currentStartPoint.Value,
                             location,
                             $"D{measurementCounter++}",
-                            MeasurementType.Distance));
+                            MeasurementType.Distance,
+                            idCounter++));
                         currentStartPoint = null;
                         UpdateMeasurementsList();
                         pictureBox.Invalidate();
@@ -426,7 +499,8 @@ namespace kinectProject
                             currentStartPoint.Value,
                             location,
                             $"R{measurementCounter++}",
-                            MeasurementType.Distance));
+                            MeasurementType.Distance,
+                            idCounter++));
                         currentStartPoint = null;
                         isSettingReference = true;
                         UpdateMeasurementsList();
@@ -461,7 +535,7 @@ namespace kinectProject
                 // Change reference measurement type
                 for (int i = 0; i < measurements.Count; i++)
                 {
-                    if (measurements[i].Name == reference.Name)
+                    if (measurements[i].ID == reference.ID)
                     {
                         Measurement m = measurements[i];
                         m.Type = MeasurementType.ReferenceLine;
@@ -485,6 +559,10 @@ namespace kinectProject
                     pictureBox.Invalidate();
                     UpdateStatus("Measurement deleted");
                 }
+                else if (currentEditMode == EditMode.Rename)
+                {
+                    RenameMeasurement(index);
+                }
                 // Move logic is now handled in MouseDown event
             }
             else
@@ -494,6 +572,24 @@ namespace kinectProject
                 pictureBox.Invalidate();
             }
         }
+
+        private void RenameMeasurement(int index)
+        {
+            Measurement m = measurements[index];
+
+            using (var renameDialog = new RenameDialog(m.Name))
+            {
+                if (renameDialog.ShowDialog() == DialogResult.OK)
+                {
+                    m.Name = renameDialog.NewName;
+                    measurements[index] = m;
+                    UpdateMeasurementsList();
+                    pictureBox.Invalidate();
+                    UpdateStatus($"Measurement renamed to {m.Name}");
+                }
+            }
+        }
+
         private void PictureBox_MouseDown(object sender, MouseEventArgs e)
         {
             if (e.Button == MouseButtons.Left)
@@ -584,6 +680,91 @@ namespace kinectProject
                 // Refresh to show real-time drawing preview
                 pictureBox.Invalidate();
             }
+            else
+            {
+                // Handle hover effect for all measurements in Normal mode
+                Point? previousHoverPoint = hoverPoint;
+                string previousHoverName = hoverMeasurementName;
+                Measurement? previousHoverMeasurement = hoverMeasurement;
+
+                int index = FindMeasurementAtPoint(e.Location);
+                if (index >= 0)
+                {
+                    hoverMeasurement = measurements[index];
+                    hoverPoint = GetHoverPointForMeasurement(hoverMeasurement.Value, e.Location);
+                    hoverMeasurementName = GetHoverTextForMeasurement(hoverMeasurement.Value);
+                }
+                else
+                {
+                    hoverPoint = null;
+                    hoverMeasurementName = "";
+                    hoverMeasurement = null;
+                }
+
+                // Only invalidate if hover state changed - FIXED COMPARISON
+                bool hoverPointChanged = hoverPoint != previousHoverPoint;
+                bool hoverNameChanged = hoverMeasurementName != previousHoverName;
+                bool hoverMeasurementChanged = !Nullable.Equals(hoverMeasurement, previousHoverMeasurement);
+
+                if (hoverPointChanged || hoverNameChanged || hoverMeasurementChanged)
+                {
+                    pictureBox.Invalidate();
+                }
+            }
+        }
+
+        private Point GetHoverPointForMeasurement(Measurement m, Point mouseLocation)
+        {
+            switch (m.Type)
+            {
+                case MeasurementType.Point:
+                    return m.Start;
+                case MeasurementType.Line:
+                case MeasurementType.Distance:
+                case MeasurementType.ReferenceLine:
+                case MeasurementType.AngleWithAxis:
+                    // Return midpoint for lines
+                    return new Point((m.Start.X + m.End.X) / 2, (m.Start.Y + m.End.Y) / 2);
+                case MeasurementType.Angle:
+                    if (m.Vertex.HasValue)
+                        return m.Vertex.Value;
+                    else
+                        return new Point((m.Start.X + m.End.X) / 2, (m.Start.Y + m.End.Y) / 2);
+                default:
+                    return mouseLocation;
+            }
+        }
+
+        private string GetHoverTextForMeasurement(Measurement m)
+        {
+            switch (m.Type)
+            {
+                case MeasurementType.Point:
+                    return $"{m.Name} (ID: {m.ID}) - ({m.Start.X}, {m.Start.Y})";
+                case MeasurementType.Line:
+                    double lineLength = CalculateDistance(m.Start, m.End);
+                    return $"{m.Name} (ID: {m.ID}): {lineLength:F1} px";
+                case MeasurementType.Distance:
+                    double pixels = CalculateDistance(m.Start, m.End);
+                    if (isReferenceSet)
+                    {
+                        double realUnits = pixels / pixelToRealRatio;
+                        return $"{m.Name} (ID: {m.ID}): {pixels:F1} px ({realUnits:F2} cm)";
+                    }
+                    return $"{m.Name} (ID: {m.ID}): {pixels:F1} px";
+                case MeasurementType.ReferenceLine:
+                    double refPixels = CalculateDistance(m.Start, m.End);
+                    double refUnits = refPixels / pixelToRealRatio;
+                    return $"{m.Name} (ID: {m.ID}): {refPixels:F1} px ({refUnits:F2} cm) [Reference]";
+                case MeasurementType.Angle:
+                    double angle = CalculateAngle(m);
+                    return $"{m.Name} (ID: {m.ID}): {angle:F1}°";
+                case MeasurementType.AngleWithAxis:
+                    double axisAngle = CalculateAngleWithAxis(m);
+                    return $"{m.Name} (ID: {m.ID}): {axisAngle:F1}° to {m.Axis}-axis";
+                default:
+                    return $"{m.Name} (ID: {m.ID})";
+            }
         }
 
         private void PictureBox_MouseUp(object sender, MouseEventArgs e)
@@ -637,7 +818,7 @@ namespace kinectProject
                     if (i != index &&
                         measurements[i].Type == MeasurementType.Angle &&
                         measurements[i].Vertex.HasValue &&
-                        measurements[i].Name == m.Name)
+                        measurements[i].ID == m.ID)
                     {
                         Measurement otherSegment = measurements[i];
                         otherSegment.Start = new Point(otherSegment.Start.X + delta.X, otherSegment.Start.Y + delta.Y);
@@ -723,13 +904,14 @@ namespace kinectProject
                     return false;
             }
         }
-        private List<Measurement> FindAngleSegments(Point vertex, string name)
+
+        private List<Measurement> FindAngleSegments(Point vertex, int id)
         {
             return measurements.Where(m =>
                 m.Type == MeasurementType.Angle &&
                 m.Vertex.HasValue &&
                 m.Vertex.Value == vertex &&
-                m.Name == name).ToList();
+                m.ID == id).ToList();
         }
 
         private bool IsNearPoint(Point p1, Point p2, int tolerance)
@@ -766,70 +948,93 @@ namespace kinectProject
             }
             selectedMeasurement = null;
             selectedMeasurementIndex = -1;
-            measurementsList.ClearSelected();
+            measurementsList.SelectedItems.Clear();
         }
 
         private void UpdateMeasurementsList()
         {
             measurementsList.Items.Clear();
 
-            foreach (var m in measurements)
+            // Group angle measurements by ID to avoid duplicates
+            var groupedMeasurements = measurements
+                .GroupBy(m => m.ID)
+                .Select(g => g.First())
+                .OrderBy(m => m.ID)
+                .ToList();
+
+            foreach (var m in groupedMeasurements)
             {
-                string itemText = $"{m.Name}: ";
+                string valueText = GetMeasurementValueText(m);
 
-                switch (m.Type)
+                ListViewItem item = new ListViewItem(m.ID.ToString());
+                item.SubItems.Add(GetMeasurementTypeString(m.Type));
+                item.SubItems.Add(m.Name);
+                item.SubItems.Add(valueText);
+
+                if (m.IsSelected)
                 {
-                    case MeasurementType.Line:
-                        double lineLength = CalculateDistance(m.Start, m.End);
-                        itemText += $"{lineLength:F1} px";
-                        break;
-
-                    case MeasurementType.Distance:
-                        double pixels = CalculateDistance(m.Start, m.End);
-                        itemText += $"{pixels:F1} px";
-
-                        if (isReferenceSet)
-                        {
-                            double realUnits = pixels / pixelToRealRatio;
-                            itemText += $" ({realUnits:F2} cm)";
-                        }
-                        break;
-
-                    case MeasurementType.ReferenceLine:
-                        double refPixels = CalculateDistance(m.Start, m.End);
-                        double refUnits = refPixels / pixelToRealRatio;
-                        itemText += $"{refPixels:F1} px ({refUnits:F2} cm) [Reference]";
-                        break;
-
-                    case MeasurementType.Angle:
-                        // Only show angle value once for each pair of segments
-                        if (m.Name.EndsWith("-1") || !measurements.Any(meas =>
-                            meas.Type == MeasurementType.Angle &&
-                            meas.Name == m.Name.Replace("-2", "-1") &&
-                            meas.Vertex == m.Vertex))
-                        {
-                            double angle = CalculateAngle(m);
-                            itemText += $"{angle:F1}°";
-                        }
-                        else
-                        {
-                            // Skip the second segment in the list
-                            continue;
-                        }
-                        break;
-
-                    case MeasurementType.AngleWithAxis:
-                        double axisAngle = CalculateAngleWithAxis(m);
-                        itemText += $"{axisAngle:F1}° relative to {m.Axis}-axis";
-                        break;
-
-                    case MeasurementType.Point:
-                        itemText += $"Point at ({m.Start.X}, {m.Start.Y})";
-                        break;
+                    item.BackColor = Color.FromArgb(75, 110, 175);
+                    item.ForeColor = Color.White;
+                }
+                else
+                {
+                    item.BackColor = measurementsList.BackColor;
+                    item.ForeColor = measurementsList.ForeColor;
                 }
 
-                if (m.IsSelected) itemText += " [Selected]";
-                measurementsList.Items.Add(itemText);
+                measurementsList.Items.Add(item);
+            }
+        }
+
+        private string GetMeasurementTypeString(MeasurementType type)
+        {
+            switch (type)
+            {
+                case MeasurementType.Line: return "Line";
+                case MeasurementType.Point: return "Point";
+                case MeasurementType.Angle: return "Angle";
+                case MeasurementType.AngleWithAxis: return "Angle Axis";
+                case MeasurementType.Distance: return "Distance";
+                case MeasurementType.ReferenceLine: return "Reference";
+                default: return "Unknown";
+            }
+        }
+
+        private string GetMeasurementValueText(Measurement m)
+        {
+            switch (m.Type)
+            {
+                case MeasurementType.Line:
+                    double lineLength = CalculateDistance(m.Start, m.End);
+                    return $"{lineLength:F1} px";
+
+                case MeasurementType.Distance:
+                    double pixels = CalculateDistance(m.Start, m.End);
+                    if (isReferenceSet)
+                    {
+                        double realUnits = pixels / pixelToRealRatio;
+                        return $"{pixels:F1} px ({realUnits:F2} cm)";
+                    }
+                    return $"{pixels:F1} px";
+
+                case MeasurementType.ReferenceLine:
+                    double refPixels = CalculateDistance(m.Start, m.End);
+                    double refUnits = refPixels / pixelToRealRatio;
+                    return $"{refPixels:F1} px ({refUnits:F2} cm)";
+
+                case MeasurementType.Angle:
+                    double angle = CalculateAngle(m);
+                    return $"{angle:F1}°";
+
+                case MeasurementType.AngleWithAxis:
+                    double axisAngle = CalculateAngleWithAxis(m);
+                    return $"{axisAngle:F1}° to {m.Axis}";
+
+                case MeasurementType.Point:
+                    return $"({m.Start.X}, {m.Start.Y})";
+
+                default:
+                    return "-";
             }
         }
 
@@ -858,17 +1063,18 @@ namespace kinectProject
             // This always returns the smaller angle between the vectors (0-180 degrees)
             return Math.Acos(cosTheta) * (180 / Math.PI);
         }
+
         // Method to calculate angle for a single measurement (find its pair)
         private double CalculateAngle(Measurement m)
         {
             if (m.Type != MeasurementType.Angle || !m.Vertex.HasValue) return 0;
 
-            // Find the other segment that shares the same vertex and name
+            // Find the other segment that shares the same vertex and ID
             Measurement otherSegment = measurements.FirstOrDefault(meas =>
                 meas.Type == MeasurementType.Angle &&
                 meas.Vertex.HasValue &&
                 meas.Vertex.Value == m.Vertex.Value &&
-                meas.Name == m.Name &&
+                meas.ID == m.ID &&
                 meas.End != m.End);
 
             if (otherSegment.Type == MeasurementType.Angle)
@@ -878,6 +1084,7 @@ namespace kinectProject
 
             return 0;
         }
+
         private double CalculateAngleWithAxis(Measurement m)
         {
             if (m.Type != MeasurementType.AngleWithAxis || !m.Axis.HasValue) return 0;
@@ -909,6 +1116,12 @@ namespace kinectProject
             foreach (var m in measurements)
             {
                 DrawMeasurement(g, m);
+            }
+
+            // Draw hover label for all measurements in Normal mode
+            if (currentEditMode == EditMode.Normal && hoverPoint.HasValue && !string.IsNullOrEmpty(hoverMeasurementName))
+            {
+                DrawHoverLabel(g, hoverPoint.Value, hoverMeasurementName);
             }
 
             // Draw current measurement in progress
@@ -956,17 +1169,43 @@ namespace kinectProject
             }
         }
 
+        private void DrawHoverLabel(Graphics g, Point point, string text)
+        {
+            using (System.Drawing.Font font = new System.Drawing.Font("Arial", 9, FontStyle.Bold))
+            using (Brush textBrush = new SolidBrush(Color.White))
+            using (Brush bgBrush = new SolidBrush(Color.FromArgb(220, 0, 0, 0)))
+            {
+                SizeF textSize = g.MeasureString(text, font);
+
+                // Position label above the point
+                RectangleF textRect = new RectangleF(
+                    point.X - textSize.Width / 2,
+                    point.Y - textSize.Height - 15,
+                    textSize.Width + 8,
+                    textSize.Height + 4);
+
+                // Draw background with rounded corners
+                g.FillRectangle(bgBrush, textRect);
+                g.DrawRectangle(Pens.White, textRect.X, textRect.Y, textRect.Width, textRect.Height);
+
+                // Draw text
+                g.DrawString(text, font, textBrush,
+                    point.X - textSize.Width / 2 + 4,
+                    point.Y - textSize.Height - 13);
+            }
+        }
+
         private void DrawAngleArcPreview(Graphics g, Point vertex, Point point1, Point point2)
         {
-            // Vecteurs depuis le sommet
+            // Vectors from vertex
             Point v1 = new Point(point1.X - vertex.X, point1.Y - vertex.Y);
             Point v2 = new Point(point2.X - vertex.X, point2.Y - vertex.Y);
 
-            // Vérif : éviter le cas point1 == vertex ou point2 == vertex
+            // Check: avoid case where point1 == vertex or point2 == vertex
             if ((v1.X == 0 && v1.Y == 0) || (v2.X == 0 && v2.Y == 0))
                 return;
 
-            // Angles initiaux
+            // Initial angles
             double angle1 = Math.Atan2(v1.Y, v1.X) * (180 / Math.PI);
             double angle2 = Math.Atan2(v2.Y, v2.X) * (180 / Math.PI);
 
@@ -991,7 +1230,7 @@ namespace kinectProject
                     sweepAngle = 360 - sweepAngle;
             }
 
-            // Vérif : angles valides avant DrawArc
+            // Check: valid angles before DrawArc
             if (float.IsNaN(startAngle) || float.IsNaN(sweepAngle) ||
                 float.IsInfinity(startAngle) || float.IsInfinity(sweepAngle) ||
                 Math.Abs(sweepAngle) < 0.01f)
@@ -999,7 +1238,7 @@ namespace kinectProject
                 return;
             }
 
-            // Calcul valeur de l’angle
+            // Calculate angle value
             double dotProduct = v1.X * v2.X + v1.Y * v2.Y;
             double mag1 = Math.Sqrt(v1.X * v1.X + v1.Y * v1.Y);
             double mag2 = Math.Sqrt(v2.X * v2.X + v2.Y * v2.Y);
@@ -1009,20 +1248,20 @@ namespace kinectProject
             {
                 double cosTheta = dotProduct / (mag1 * mag2);
 
-                // Clamp pour éviter NaN dû à des imprécisions flottantes
+                // Clamp to avoid NaN due to floating point inaccuracies
                 cosTheta = Math.Max(-1, Math.Min(1, cosTheta));
 
                 angleValue = Math.Acos(cosTheta) * (180 / Math.PI);
             }
 
-            // Dessin de l’arc
+            // Draw arc
             using (Pen arcPen = new Pen(Color.FromArgb(150, Color.Orange), 2))
             {
                 arcPen.DashStyle = DashStyle.Dash;
                 g.DrawArc(arcPen, vertex.X - 30, vertex.Y - 30, 60, 60, startAngle, sweepAngle);
             }
 
-            // Dessin du texte de l’angle
+            // Draw angle text
             using (System.Drawing.Font font = new System.Drawing.Font("Arial", 9))
             using (Brush textBrush = new SolidBrush(Color.White))
             using (Brush bgBrush = new SolidBrush(Color.FromArgb(150, Color.Black)))
@@ -1120,29 +1359,39 @@ namespace kinectProject
 
             using (Pen pen = new Pen(color, lineWidth))
             using (Brush brush = new SolidBrush(color))
-            using (System.Drawing.Font font = new System.Drawing.Font("Arial", 9))
+            using (System.Drawing.Font font = new System.Drawing.Font("Arial", 9, FontStyle.Bold))
             using (Brush textBrush = new SolidBrush(Color.White))
-            using (Brush bgBrush = new SolidBrush(Color.FromArgb(128, Color.Black)))
+            using (Brush bgBrush = new SolidBrush(Color.FromArgb(200, Color.Black)))
             {
                 switch (m.Type)
                 {
                     case MeasurementType.Point:
                         g.FillEllipse(brush, m.Start.X - pointSize / 2, m.Start.Y - pointSize / 2, pointSize, pointSize);
 
-                        // Draw label
-                        string label = $"{m.Name} ({m.Start.X}, {m.Start.Y})";
-                        SizeF textSize = g.MeasureString(label, font);
-                        RectangleF textRect = new RectangleF(
-                            m.Start.X + 10, m.Start.Y - textSize.Height / 2,
-                            textSize.Width + 4, textSize.Height);
-                        g.FillRectangle(bgBrush, textRect);
-                        g.DrawString(label, font, textBrush, m.Start.X + 12, m.Start.Y - textSize.Height / 2);
+                        // Draw ID near the point
+                        string pointId = m.ID.ToString();
+                        SizeF idSize = g.MeasureString(pointId, font);
+                        RectangleF idRect = new RectangleF(
+                            m.Start.X + 8, m.Start.Y - idSize.Height / 2,
+                            idSize.Width + 4, idSize.Height);
+                        g.FillRectangle(bgBrush, idRect);
+                        g.DrawString(pointId, font, textBrush, m.Start.X + 10, m.Start.Y - idSize.Height / 2);
                         break;
 
                     case MeasurementType.Line:
                         g.DrawLine(pen, m.Start, m.End);
                         g.FillEllipse(brush, m.Start.X - pointSize / 2, m.Start.Y - pointSize / 2, pointSize, pointSize);
                         g.FillEllipse(brush, m.End.X - pointSize / 2, m.End.Y - pointSize / 2, pointSize, pointSize);
+
+                        // Draw ID at midpoint
+                        string lineId = m.ID.ToString();
+                        SizeF lineIdSize = g.MeasureString(lineId, font);
+                        Point lineMidPoint = new Point((m.Start.X + m.End.X) / 2, (m.Start.Y + m.End.Y) / 2);
+                        RectangleF lineIdRect = new RectangleF(
+                            lineMidPoint.X - lineIdSize.Width / 2, lineMidPoint.Y - lineIdSize.Height - 10,
+                            lineIdSize.Width + 4, lineIdSize.Height);
+                        g.FillRectangle(bgBrush, lineIdRect);
+                        g.DrawString(lineId, font, textBrush, lineMidPoint.X - lineIdSize.Width / 2 + 2, lineMidPoint.Y - lineIdSize.Height - 8);
                         break;
 
                     case MeasurementType.Distance:
@@ -1151,20 +1400,20 @@ namespace kinectProject
                         g.FillEllipse(brush, m.Start.X - pointSize / 2, m.Start.Y - pointSize / 2, pointSize, pointSize);
                         g.FillEllipse(brush, m.End.X - pointSize / 2, m.End.Y - pointSize / 2, pointSize, pointSize);
 
-                        // Draw measurement value
+                        // Draw measurement value with ID
                         double distance = CalculateDistance(m.Start, m.End);
                         string distText = m.Type == MeasurementType.ReferenceLine ?
-                            $"{distance / pixelToRealRatio:F1} cm" :
+                            $"{m.ID}: {distance / pixelToRealRatio:F1} cm" :
                             isReferenceSet ?
-                                $"{distance / pixelToRealRatio:F1} cm" :
-                                $"{distance:F1} px";
+                                $"{m.ID}" :
+                                $"{m.ID}";
 
                         Point midPoint = new Point(
                             (m.Start.X + m.End.X) / 2,
                             (m.Start.Y + m.End.Y) / 2);
 
-                        textSize = g.MeasureString(distText, font);
-                        textRect = new RectangleF(
+                        SizeF textSize = g.MeasureString(distText, font);
+                        RectangleF textRect = new RectangleF(
                             midPoint.X - textSize.Width / 2, midPoint.Y - textSize.Height - 10,
                             textSize.Width + 4, textSize.Height);
                         g.FillRectangle(bgBrush, textRect);
@@ -1180,23 +1429,30 @@ namespace kinectProject
                             g.FillEllipse(brush, m.Vertex.Value.X - pointSize / 2, m.Vertex.Value.Y - pointSize / 2, pointSize, pointSize);
                             g.FillEllipse(brush, m.End.X - pointSize / 2, m.End.Y - pointSize / 2, pointSize, pointSize);
 
-                            // Find the other segment that shares the same vertex and name
+                            // Find the other segment that shares the same vertex and ID
                             Measurement otherSegment = measurements.FirstOrDefault(meas =>
                                 meas.Type == MeasurementType.Angle &&
                                 meas.Vertex.HasValue &&
                                 meas.Vertex.Value == m.Vertex.Value &&
-                                meas.Name == m.Name &&
+                                meas.ID == m.ID &&
                                 meas.End != m.End);
 
                             if (otherSegment.Type == MeasurementType.Angle)
                             {
-                                // Draw angle value at vertex
+                                // Draw angle value at vertex with ID
                                 double angle = CalculateAngle(m, otherSegment);
-                                string angleText = $"{angle:F1}°";
+                                string angleText = $"{m.ID}";
 
-                                textSize = g.MeasureString(angleText, font);
-                                g.FillRectangle(bgBrush, m.Vertex.Value.X, m.Vertex.Value.Y, textSize.Width + 4, textSize.Height);
-                                g.DrawString(angleText, font, textBrush, m.Vertex.Value.X + 2, m.Vertex.Value.Y);
+                                SizeF angleTextSize = g.MeasureString(angleText, font);
+                                RectangleF angleTextRect = new RectangleF(
+                                    m.Vertex.Value.X - angleTextSize.Width / 2,
+                                    m.Vertex.Value.Y - angleTextSize.Height - 20,
+                                    angleTextSize.Width + 4,
+                                    angleTextSize.Height);
+                                g.FillRectangle(bgBrush, angleTextRect);
+                                g.DrawString(angleText, font, textBrush,
+                                    m.Vertex.Value.X - angleTextSize.Width / 2 + 2,
+                                    m.Vertex.Value.Y - angleTextSize.Height - 18);
 
                                 // Draw angle arc
                                 DrawAngleArc(g, m, otherSegment);
@@ -1209,16 +1465,23 @@ namespace kinectProject
                         g.FillEllipse(brush, m.Start.X - pointSize / 2, m.Start.Y - pointSize / 2, pointSize, pointSize);
                         g.FillEllipse(brush, m.End.X - pointSize / 2, m.End.Y - pointSize / 2, pointSize, pointSize);
 
-                        // Draw angle value
+                        // Draw angle value with ID
                         double axisAngle = CalculateAngleWithAxis(m);
-                        string axisAngleText = $"{axisAngle:F1}° to {m.Axis}";
+                        string axisAngleText = $"{m.ID}";
 
-                        textSize = g.MeasureString(axisAngleText, font);
-                        Point lineMidPoint = new Point(
+                        SizeF axisTextSize = g.MeasureString(axisAngleText, font);
+                        Point lineMidPoint1 = new Point(
                             (m.Start.X + m.End.X) / 2,
                             (m.Start.Y + m.End.Y) / 2);
-                        g.FillRectangle(bgBrush, lineMidPoint.X, lineMidPoint.Y, textSize.Width + 4, textSize.Height);
-                        g.DrawString(axisAngleText, font, textBrush, lineMidPoint.X + 2, lineMidPoint.Y);
+                        RectangleF axisTextRect = new RectangleF(
+                            lineMidPoint1.X - axisTextSize.Width / 2,
+                            lineMidPoint1.Y - axisTextSize.Height - 10,
+                            axisTextSize.Width + 4,
+                            axisTextSize.Height);
+                        g.FillRectangle(bgBrush, axisTextRect);
+                        g.DrawString(axisAngleText, font, textBrush,
+                            lineMidPoint1.X - axisTextSize.Width / 2 + 2,
+                            lineMidPoint1.Y - axisTextSize.Height - 8);
 
                         // Draw angle arc relative to axis
                         DrawAxisAngleArc(g, m);
@@ -1288,6 +1551,7 @@ namespace kinectProject
                 g.DrawArc(arcPen, m1.Vertex.Value.X - 30, m1.Vertex.Value.Y - 30, 60, 60, startAngle, sweepAngle);
             }
         }
+
         private void DrawAxisAngleArc(Graphics g, Measurement m)
         {
             if (m.Type != MeasurementType.AngleWithAxis || !m.Axis.HasValue) return;
@@ -1373,7 +1637,7 @@ namespace kinectProject
         {
             // Create document with margins
             Document document = new Document(PageSize.A4, 36, 36, 36, 36);
-            PdfWriter.GetInstance(document, new FileStream(filePath, FileMode.Create));
+            PdfWriter writer = PdfWriter.GetInstance(document, new FileStream(filePath, FileMode.Create));
             document.Open();
 
             // Add title
@@ -1390,48 +1654,82 @@ namespace kinectProject
             date.SpacingAfter = 20;
             document.Add(date);
 
-            // Add the image
-            if (pictureBox.Image != null)
+            // Prepare the image first to calculate its height
+            iTextSharp.text.Image pdfImage = null;
+            if (pictureBox.Image != null && originalImage != null)
             {
                 try
                 {
-                    // Save the current image with measurements to a temporary file
-                    string tempImagePath = Path.GetTempFileName() + ".png";
-                    using (Bitmap bmp = new Bitmap(pictureBox.Width, pictureBox.Height))
+                    // Calculate scaling factors between PictureBox and original image
+                    float scaleX = (float)originalImage.Width / pictureBox.ClientSize.Width;
+                    float scaleY = (float)originalImage.Height / pictureBox.ClientSize.Height;
+
+                    // For PictureBoxSizeMode.Zoom, we need to calculate the actual image display area
+                    Size imageSize = originalImage.Size;
+                    Size containerSize = pictureBox.ClientSize;
+
+                    float ratioX = (float)containerSize.Width / imageSize.Width;
+                    float ratioY = (float)containerSize.Height / imageSize.Height;
+                    float ratio = Math.Min(ratioX, ratioY);
+
+                    int newWidth = (int)(imageSize.Width * ratio);
+                    int newHeight = (int)(imageSize.Height * ratio);
+
+                    int offsetX = (containerSize.Width - newWidth) / 2;
+                    int offsetY = (containerSize.Height - newHeight) / 2;
+
+                    // Calculate the inverse scaling for measurements
+                    float inverseScaleX = (float)originalImage.Width / newWidth;
+                    float inverseScaleY = (float)originalImage.Height / newHeight;
+
+                    // Create a bitmap with the original image dimensions
+                    using (Bitmap bmp = new Bitmap(originalImage.Width, originalImage.Height))
                     {
                         using (Graphics g = Graphics.FromImage(bmp))
                         {
-                            g.Clear(pictureBox.BackColor);
-                            if (pictureBox.Image != null)
+                            g.Clear(Color.White);
+                            g.DrawImage(originalImage, 0, 0, originalImage.Width, originalImage.Height);
+
+                            // Draw measurements on the image with scaled coordinates
+                            foreach (var m in measurements)
                             {
-                                g.DrawImage(pictureBox.Image,
-                                            new System.Drawing.Rectangle(0, 0, pictureBox.Width, pictureBox.Height),
-                                            new System.Drawing.Rectangle(0, 0, pictureBox.Image.Width, pictureBox.Image.Height),
-                                            GraphicsUnit.Pixel);
+                                DrawMeasurementOnBitmap(g, m, offsetX, offsetY, inverseScaleX, inverseScaleY);
                             }
-
-                            // Draw measurements on the image
-                            PaintEventArgs e = new PaintEventArgs(g, new System.Drawing.Rectangle(0, 0, pictureBox.Width, pictureBox.Height));
-                            PictureBox_Paint(pictureBox, e);
                         }
+
+                        // Save to temporary file
+                        string tempImagePath = Path.GetTempFileName() + ".png";
                         bmp.Save(tempImagePath, System.Drawing.Imaging.ImageFormat.Png);
+
+                        // Create PDF image and scale it
+                        pdfImage = iTextSharp.text.Image.GetInstance(tempImagePath);
+                        pdfImage.Alignment = Element.ALIGN_CENTER;
+
+                        // Scale image to fit page width while maintaining aspect ratio
+                        float maxWidth = document.PageSize.Width - 72; // 1 inch margins
+                        float maxHeight = document.PageSize.Height - 200; // Leave more space
+
+                        if (pdfImage.Width > maxWidth || pdfImage.Height > maxHeight)
+                        {
+                            pdfImage.ScaleToFit(maxWidth, maxHeight);
+                        }
+
+                        // Check if there's enough space on current page for the image
+                        float imageHeight = pdfImage.ScaledHeight + 40; // Add some margin
+                        float currentVerticalPosition = writer.GetVerticalPosition(false);
+
+                        if (currentVerticalPosition - imageHeight < document.BottomMargin)
+                        {
+                            // Not enough space - add new page
+                            document.NewPage();
+                        }
+
+                        pdfImage.SpacingAfter = 20;
+                        document.Add(pdfImage);
+
+                        // Clean up temporary file
+                        File.Delete(tempImagePath);
                     }
-
-                    // Add image to PDF
-                    iTextSharp.text.Image pdfImage = iTextSharp.text.Image.GetInstance(tempImagePath);
-                    pdfImage.Alignment = Element.ALIGN_CENTER;
-
-                    // Scale image to fit page width
-                    if (pdfImage.Width > document.PageSize.Width - 72)
-                    {
-                        pdfImage.ScaleToFit(document.PageSize.Width - 72, document.PageSize.Height - 72);
-                    }
-
-                    pdfImage.SpacingAfter = 20;
-                    document.Add(pdfImage);
-
-                    // Clean up temporary file
-                    File.Delete(tempImagePath);
                 }
                 catch (Exception ex)
                 {
@@ -1442,6 +1740,16 @@ namespace kinectProject
             // Add measurements table if there are any
             if (measurements.Any())
             {
+                // Check if we need a new page for the table
+                float tableEstimatedHeight = measurements.Count * 20 + 50; // Estimate table height
+                float currentVerticalPosition = writer.GetVerticalPosition(false);
+
+                if (currentVerticalPosition - tableEstimatedHeight < document.BottomMargin + 100)
+                {
+                    // Not enough space - add new page
+                    document.NewPage();
+                }
+
                 // Add measurements header
                 iTextSharp.text.Font tableHeaderFont = FontFactory.GetFont(FontFactory.HELVETICA_BOLD, 12, BaseColor.DARK_GRAY);
                 Paragraph measurementsHeader = new Paragraph("Measurement Summary", tableHeaderFont);
@@ -1449,21 +1757,29 @@ namespace kinectProject
                 measurementsHeader.SpacingAfter = 10;
                 document.Add(measurementsHeader);
 
-                // Create measurements table
-                PdfPTable table = new PdfPTable(4);
+                // Create measurements table with ID column
+                PdfPTable table = new PdfPTable(5);
                 table.WidthPercentage = 100;
-                table.SetWidths(new float[] { 2, 3, 2, 3 });
+                table.SetWidths(new float[] { 1, 2, 3, 2, 3 });
 
                 // Add table headers
                 iTextSharp.text.Font headerFont = FontFactory.GetFont(FontFactory.HELVETICA_BOLD, 10, BaseColor.WHITE);
+                AddTableHeaderCell(table, "ID", headerFont, BaseColor.DARK_GRAY);
                 AddTableHeaderCell(table, "Type", headerFont, BaseColor.DARK_GRAY);
                 AddTableHeaderCell(table, "Name", headerFont, BaseColor.DARK_GRAY);
                 AddTableHeaderCell(table, "Pixel Value", headerFont, BaseColor.DARK_GRAY);
                 AddTableHeaderCell(table, "Real Value", headerFont, BaseColor.DARK_GRAY);
 
+                // Group measurements by ID to avoid duplicates
+                var groupedMeasurements = measurements
+                    .GroupBy(m => m.ID)
+                    .Select(g => g.First())
+                    .OrderBy(m => m.ID)
+                    .ToList();
+
                 // Add measurement rows
                 iTextSharp.text.Font cellFont = FontFactory.GetFont(FontFactory.HELVETICA, 9, BaseColor.BLACK);
-                foreach (var m in measurements)
+                foreach (var m in groupedMeasurements)
                 {
                     AddMeasurementToTable(table, m, cellFont);
                 }
@@ -1481,6 +1797,13 @@ namespace kinectProject
             // Add reference scale information if available
             if (isReferenceSet)
             {
+                // Check if we need a new page
+                float currentVerticalPosition = writer.GetVerticalPosition(false);
+                if (currentVerticalPosition < document.BottomMargin + 50)
+                {
+                    document.NewPage();
+                }
+
                 Paragraph scaleInfo = new Paragraph($"Reference Scale: 1 cm = {pixelToRealRatio:F2} pixels",
                     FontFactory.GetFont(FontFactory.HELVETICA, 9, BaseColor.GRAY));
                 scaleInfo.SpacingBefore = 10;
@@ -1496,6 +1819,106 @@ namespace kinectProject
 
             document.Close();
         }
+        private void DrawMeasurementOnBitmap(Graphics g, Measurement m, int offsetX, int offsetY, float scaleX, float scaleY)
+        {
+            // Scale the measurement coordinates from PictureBox coordinates to original image coordinates
+            Point ScalePoint(Point point)
+            {
+                // Adjust for zoom and center offset, then scale to original image size
+                int scaledX = (int)((point.X - offsetX) * scaleX);
+                int scaledY = (int)((point.Y - offsetY) * scaleY);
+
+                // Ensure coordinates are within image bounds
+                scaledX = Math.Max(0, Math.Min(scaledX, originalImage.Width - 1));
+                scaledY = Math.Max(0, Math.Min(scaledY, originalImage.Height - 1));
+
+                return new Point(scaledX, scaledY);
+            }
+
+            // Similar to DrawMeasurement but for the PDF export bitmap with scaled coordinates
+            Color color = GetMeasurementColor(m.Type);
+            int lineWidth = 2;
+            int pointSize = 6;
+
+            using (Pen pen = new Pen(color, lineWidth))
+            using (Brush brush = new SolidBrush(color))
+            using (System.Drawing.Font font = new System.Drawing.Font("Arial", 10, FontStyle.Bold))
+            using (Brush textBrush = new SolidBrush(Color.Black))
+            {
+                // Scale all points
+                Point scaledStart = ScalePoint(m.Start);
+                Point scaledEnd = ScalePoint(m.End);
+                Point? scaledVertex = m.Vertex.HasValue ? ScalePoint(m.Vertex.Value) : (Point?)null;
+
+                switch (m.Type)
+                {
+                    case MeasurementType.Point:
+                        g.FillEllipse(brush, scaledStart.X - pointSize / 2, scaledStart.Y - pointSize / 2, pointSize, pointSize);
+                        g.DrawString(m.ID.ToString(), font, textBrush, scaledStart.X + 5, scaledStart.Y - 10);
+                        break;
+
+                    case MeasurementType.Line:
+                        g.DrawLine(pen, scaledStart, scaledEnd);
+                        g.FillEllipse(brush, scaledStart.X - pointSize / 2, scaledStart.Y - pointSize / 2, pointSize, pointSize);
+                        g.FillEllipse(brush, scaledEnd.X - pointSize / 2, scaledEnd.Y - pointSize / 2, pointSize, pointSize);
+                        Point lineMidPoint = new Point((scaledStart.X + scaledEnd.X) / 2, (scaledStart.Y + scaledEnd.Y) / 2);
+                        g.DrawString(m.ID.ToString(), font, textBrush, lineMidPoint.X, lineMidPoint.Y - 15);
+                        break;
+
+                    case MeasurementType.Distance:
+                    case MeasurementType.ReferenceLine:
+                        g.DrawLine(pen, scaledStart, scaledEnd);
+                        g.FillEllipse(brush, scaledStart.X - pointSize / 2, scaledStart.Y - pointSize / 2, pointSize, pointSize);
+                        g.FillEllipse(brush, scaledEnd.X - pointSize / 2, scaledEnd.Y - pointSize / 2, pointSize, pointSize);
+
+                        double distance = CalculateDistance(m.Start, m.End);
+                        string distText = m.Type == MeasurementType.ReferenceLine ?
+                            $"{m.ID}: {distance / pixelToRealRatio:F1} cm" :
+                            isReferenceSet ?
+                                $"{m.ID}: {distance / pixelToRealRatio:F1} cm" :
+                                $"{m.ID}: {distance:F1} px";
+
+                        Point midPoint = new Point((scaledStart.X + scaledEnd.X) / 2, (scaledStart.Y + scaledEnd.Y) / 2);
+                        g.DrawString(distText, font, textBrush, midPoint.X, midPoint.Y - 15);
+                        break;
+
+                    case MeasurementType.Angle:
+                        if (scaledVertex.HasValue)
+                        {
+                            g.DrawLine(pen, scaledVertex.Value, scaledEnd);
+                            g.FillEllipse(brush, scaledVertex.Value.X - pointSize / 2, scaledVertex.Value.Y - pointSize / 2, pointSize, pointSize);
+                            g.FillEllipse(brush, scaledEnd.X - pointSize / 2, scaledEnd.Y - pointSize / 2, pointSize, pointSize);
+
+                            // Find the other segment that shares the same vertex and ID
+                            Measurement otherSegment = measurements.FirstOrDefault(meas =>
+                                meas.Type == MeasurementType.Angle &&
+                                meas.Vertex.HasValue &&
+                                meas.ID == m.ID &&
+                                meas.End != m.End);
+
+                            if (otherSegment.Type == MeasurementType.Angle)
+                            {
+                                Point scaledOtherEnd = ScalePoint(otherSegment.End);
+                                double angle = CalculateAngle(m, otherSegment);
+                                string angleText = $"{m.ID}: {angle:F1}°";
+                                g.DrawString(angleText, font, textBrush, scaledVertex.Value.X, scaledVertex.Value.Y - 20);
+                            }
+                        }
+                        break;
+
+                    case MeasurementType.AngleWithAxis:
+                        g.DrawLine(pen, scaledStart, scaledEnd);
+                        g.FillEllipse(brush, scaledStart.X - pointSize / 2, scaledStart.Y - pointSize / 2, pointSize, pointSize);
+                        g.FillEllipse(brush, scaledEnd.X - pointSize / 2, scaledEnd.Y - pointSize / 2, pointSize, pointSize);
+
+                        double axisAngle = CalculateAngleWithAxis(m);
+                        string axisAngleText = $"{m.ID}: {axisAngle:F1}° to {m.Axis}";
+                        Point axisMidPoint = new Point((scaledStart.X + scaledEnd.X) / 2, (scaledStart.Y + scaledEnd.Y) / 2);
+                        g.DrawString(axisAngleText, font, textBrush, axisMidPoint.X, axisMidPoint.Y - 15);
+                        break;
+                }
+            }
+        }
 
         private void AddTableHeaderCell(PdfPTable table, string text, iTextSharp.text.Font font, BaseColor bgColor)
         {
@@ -1508,8 +1931,11 @@ namespace kinectProject
 
         private void AddMeasurementToTable(PdfPTable table, Measurement m, iTextSharp.text.Font font)
         {
+            // ID column
+            table.AddCell(new PdfPCell(new Phrase(m.ID.ToString(), font)) { Padding = 5, HorizontalAlignment = Element.ALIGN_CENTER });
+
             // Type column
-            table.AddCell(new PdfPCell(new Phrase(m.Type.ToString(), font)) { Padding = 5 });
+            table.AddCell(new PdfPCell(new Phrase(GetMeasurementTypeString(m.Type), font)) { Padding = 5 });
 
             // Name column
             table.AddCell(new PdfPCell(new Phrase(m.Name, font)) { Padding = 5 });
@@ -1575,7 +2001,6 @@ namespace kinectProject
                     return "-";
             }
         }
-
 
         // Dialog for axis selection
         private class AxisSelectionDialog : Form
@@ -1682,8 +2107,75 @@ namespace kinectProject
             }
         }
 
+        // Dialog for renaming measurements
+        private class RenameDialog : Form
+        {
+            private TextBox textBox;
 
+            public string NewName { get; private set; }
+
+            public RenameDialog(string currentName)
+            {
+                InitializeComponent(currentName);
+            }
+
+            private void InitializeComponent(string currentName)
+            {
+                this.Text = "Rename Measurement";
+                this.Size = new Size(300, 150);
+                this.FormBorderStyle = FormBorderStyle.FixedDialog;
+                this.StartPosition = FormStartPosition.CenterParent;
+                this.MaximizeBox = false;
+                this.MinimizeBox = false;
+
+                Label label = new Label();
+                label.Text = "Enter new name for measurement:";
+                label.Location = new Point(20, 20);
+                label.Size = new Size(250, 20);
+
+                textBox = new TextBox();
+                textBox.Text = currentName;
+                textBox.Location = new Point(20, 50);
+                textBox.Size = new Size(250, 20);
+
+                Button okButton = new Button();
+                okButton.Text = "OK";
+                okButton.DialogResult = DialogResult.OK;
+                okButton.Location = new Point(60, 80);
+                okButton.Size = new Size(75, 25);
+                okButton.Click += OkButton_Click;
+
+                Button cancelButton = new Button();
+                cancelButton.Text = "Cancel";
+                cancelButton.DialogResult = DialogResult.Cancel;
+                cancelButton.Location = new Point(150, 80);
+                cancelButton.Size = new Size(75, 25);
+
+                this.Controls.Add(label);
+                this.Controls.Add(textBox);
+                this.Controls.Add(okButton);
+                this.Controls.Add(cancelButton);
+                this.AcceptButton = okButton;
+                this.CancelButton = cancelButton;
+            }
+
+            private void OkButton_Click(object sender, EventArgs e)
+            {
+                if (!string.IsNullOrWhiteSpace(textBox.Text))
+                {
+                    NewName = textBox.Text.Trim();
+                }
+                else
+                {
+                    MessageBox.Show("Please enter a valid name.");
+                    this.DialogResult = DialogResult.None;
+                }
+            }
+        }
+
+        private void BodyPictureAnalyzer_Load(object sender, EventArgs e)
+        {
+
+        }
     }
-
-
 }
