@@ -157,6 +157,9 @@
     <EmbeddedResource Include="BodyPictureAnalyzer.resx">
       <DependentUpon>BodyPictureAnalyzer.cs</DependentUpon>
     </EmbeddedResource>
+    <EmbeddedResource Include="CurveDataViewer.resx">
+      <DependentUpon>CurveDataViewer.cs</DependentUpon>
+    </EmbeddedResource>
     <EmbeddedResource Include="FoReferenceInputDialog.resx">
       <DependentUpon>FoReferenceInputDialog.cs</DependentUpon>
     </EmbeddedResource>

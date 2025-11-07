@@ -118,10 +118,15 @@ namespace KinectProject
         private void InitializeComponent()
         {
             this.SuspendLayout();
-            this.ClientSize = new Size(600, 400);
+            // 
+            // CurveDataViewer
+            // 
+            this.ClientSize = new System.Drawing.Size(600, 400);
             this.Name = "CurveDataViewer";
             this.Text = "Visualisateur Données Courbe";
+            this.Load += new System.EventHandler(this.CurveDataViewer_Load);
             this.ResumeLayout(false);
+
         }
 
         protected override void Dispose(bool disposing)
@@ -135,6 +140,10 @@ namespace KinectProject
             base.Dispose(disposing);
         }
 
+        private void CurveDataViewer_Load(object sender, EventArgs e)
+        {
+
+        }
     }
 
 

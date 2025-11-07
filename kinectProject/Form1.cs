@@ -1832,16 +1832,9 @@ private void BtnOpenBodyAnalyzer_Click(object sender, EventArgs e)
 
                         if (loadedCurves.Count > 0)
                         {
-                            if (loadedCurves.Count == 1)
-                            {
-                                // Single file - open in individual viewer
-                                OpenCurveDataViewer(loadedCurves[0]);
-                            }
-                            else
-                            {
-                                // Multiple files - open in multi-curve viewer
+                           
                                 OpenMultiCurveViewer(loadedCurves);
-                            }
+                            
                         }
                         else
                         {
