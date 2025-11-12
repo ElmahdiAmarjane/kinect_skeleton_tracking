@@ -14,7 +14,7 @@ namespace kinectProject
     public partial class BodyPictureAnalyzer : Form
     {
         // Enums
-        private enum ToolMode { None, Line, Point, Angle, AngleWithAxis, Distance, Reference }
+        private enum ToolMode { None, Line, Point, Angle, AngleWithAxis, Distance, Reference , Perpendicular }
         private enum EditMode { None, Move, Delete, Rename, Normal }
         private enum AxisType { X, Y }
 
@@ -43,7 +43,7 @@ namespace kinectProject
             }
         }
 
-        private enum MeasurementType { Line, Point, Angle, AngleWithAxis, Distance, ReferenceLine }
+        private enum MeasurementType { Line, Point, Angle, AngleWithAxis, Distance, ReferenceLine, PerpendicularLine }
 
         // Application state
         private ToolMode currentTool = ToolMode.None;
@@ -70,6 +70,10 @@ namespace kinectProject
         private string hoverMeasurementName = "";
         private Measurement? hoverMeasurement = null;
 
+
+        private Measurement? selectedLineForPerpendicular = null;
+        private bool isSelectingBaseLine = false;
+
         // UI Controls
         private PictureBox pictureBox;
         private ToolStrip toolStrip;
@@ -92,12 +96,20 @@ namespace kinectProject
             this.BackColor = Color.FromArgb(45, 45, 48);
             this.ForeColor = Color.White;
 
-            // Toolstrip setup
+            //// Toolstrip setup
+            //toolStrip = new ToolStrip();
+            //toolStrip.Dock = DockStyle.Top;
+            //toolStrip.BackColor = Color.FromArgb(62, 62, 64);
+            //toolStrip.ForeColor = Color.White;
+            // Toolstrip setup - MODIFIER CETTE SECTION
             toolStrip = new ToolStrip();
             toolStrip.Dock = DockStyle.Top;
             toolStrip.BackColor = Color.FromArgb(62, 62, 64);
             toolStrip.ForeColor = Color.White;
+            toolStrip.RenderMode = ToolStripRenderMode.Professional;
 
+            // Utiliser un renderer personnalisé pour contrôler l'apparence
+            toolStrip.Renderer = new CustomToolStripRenderer();
             // Toolstrip buttons
             AddToolButton("📁 Import Image", BtnImport_Click);
             AddToolSeparator();
@@ -107,6 +119,7 @@ namespace kinectProject
 
             AddToolButton("📏 Line Tool", (s, e) => SetToolMode(ToolMode.Line));
             AddToolButton("• Point Tool", (s, e) => SetToolMode(ToolMode.Point));
+            AddToolButton("⟂ Perpendicular", (s, e) => SetToolMode(ToolMode.Perpendicular));
             AddToolButton("📐 Angle Tool", (s, e) => SetToolMode(ToolMode.Angle));
             AddToolButton("📊 Angle with Axis", (s, e) => SetToolMode(ToolMode.AngleWithAxis));
             AddToolButton("📐 Distance Tool", (s, e) => SetToolMode(ToolMode.Distance));
@@ -196,6 +209,8 @@ namespace kinectProject
             currentStartPoint = null;
             angleVertex = null;
             angleFirstPoint = null;
+            selectedLineForPerpendicular = null; // ← Ajouter cette ligne
+            isSelectingBaseLine = false;         // ← Ajouter cette ligne
 
             string statusText = "";
             switch (mode)
@@ -206,6 +221,7 @@ namespace kinectProject
                 case ToolMode.AngleWithAxis: statusText = "Angle with Axis: Draw a line, then select axis"; break;
                 case ToolMode.Distance: statusText = "Distance Tool: Click to measure distance"; break;
                 case ToolMode.Reference: statusText = "Reference Tool: Draw a line of known length"; break;
+                case ToolMode.Perpendicular: statusText = "Perpendicular Tool: Select a line first, then click to place perpendicular line";  break;
             }
 
             UpdateStatus(statusText);
@@ -220,6 +236,9 @@ namespace kinectProject
             currentStartPoint = null;
             angleVertex = null;
             angleFirstPoint = null;
+
+            selectedLineForPerpendicular = null; // ← Ajouter cette ligne
+            isSelectingBaseLine = false;         // ← Ajouter cette ligne
 
             string statusText = "";
             switch (mode)
@@ -521,6 +540,46 @@ namespace kinectProject
                         isSettingReference = false;
                     }
                     break;
+                case ToolMode.Perpendicular:
+                    if (!isSelectingBaseLine)
+                    {
+                        // First click: select the base line
+                        int lineIndex = FindMeasurementAtPoint(location);
+                        if (lineIndex >= 0 && (measurements[lineIndex].Type == MeasurementType.Line ||
+                                              measurements[lineIndex].Type == MeasurementType.Distance))
+                        {
+                            selectedLineForPerpendicular = measurements[lineIndex];
+                            isSelectingBaseLine = true;
+                            UpdateStatus("Base line selected. Now click to place perpendicular line endpoint");
+
+                            // Highlight the selected line
+                            DeselectAllMeasurements();
+                            Measurement m = measurements[lineIndex];
+                            m.IsSelected = true;
+                            measurements[lineIndex] = m;
+                            pictureBox.Invalidate();
+                        }
+                        else
+                        {
+                            UpdateStatus("Please select a valid line first");
+                        }
+                    }
+                    else
+                    {
+                        // Second click: create perpendicular line
+                        if (selectedLineForPerpendicular.HasValue)
+                        {
+                            CreatePerpendicularLine(selectedLineForPerpendicular.Value, location);
+                            isSelectingBaseLine = false;
+                            selectedLineForPerpendicular = null;
+                            DeselectAllMeasurements();
+                            UpdateMeasurementsList();
+                            pictureBox.Invalidate();
+                        }
+                    }
+                    break;
+
+
             }
         }
 
@@ -890,6 +949,7 @@ namespace kinectProject
                 case MeasurementType.Distance:
                 case MeasurementType.ReferenceLine:
                 case MeasurementType.AngleWithAxis:
+                case MeasurementType.PerpendicularLine: // ← Ajouter cette ligne
                     return IsPointNearLine(point, m.Start, m.End, tolerance);
 
                 case MeasurementType.Angle:
@@ -996,6 +1056,7 @@ namespace kinectProject
                 case MeasurementType.AngleWithAxis: return "Angle Axis";
                 case MeasurementType.Distance: return "Distance";
                 case MeasurementType.ReferenceLine: return "Reference";
+                case MeasurementType.PerpendicularLine: return "Perpendicular";
                 default: return "Unknown";
             }
         }
@@ -1032,6 +1093,15 @@ namespace kinectProject
 
                 case MeasurementType.Point:
                     return $"({m.Start.X}, {m.Start.Y})";
+                case MeasurementType.PerpendicularLine: // ← Ajouter ce cas
+                    double perpLength = CalculateDistance(m.Start, m.End);
+                    if (isReferenceSet)
+                    {
+                        double realUnits = perpLength / pixelToRealRatio;
+                        return $"{perpLength:F1} px ({realUnits:F2} cm)";
+                    }
+                    return $"{perpLength:F1} px";
+
 
                 default:
                     return "-";
@@ -1165,8 +1235,49 @@ namespace kinectProject
                             DrawAngleHelpers(g, currentStartPoint.Value, currentPos);
                         }
                     }
+                    else if (currentTool == ToolMode.Perpendicular && isSelectingBaseLine && selectedLineForPerpendicular.HasValue)
+                    {
+                        Point currentPosi = pictureBox.PointToClient(Cursor.Position);
+
+                        // Draw preview of the perpendicular line
+                        if (selectedLineForPerpendicular.HasValue)
+                        {
+                            Point foot = CalculatePerpendicularFoot(selectedLineForPerpendicular.Value, currentPosi);
+
+                            using (Pen previewPen = new Pen(Color.Cyan, 2) { DashStyle = DashStyle.Dash })
+                            {
+                                g.DrawLine(previewPen, foot, currentPosi);
+                            }
+
+                            // Draw perpendicular symbol (small square at the intersection)
+                            using (Brush symbolBrush = new SolidBrush(Color.Cyan))
+                            {
+                                g.FillRectangle(symbolBrush, foot.X - 3, foot.Y - 3, 6, 6);
+                            }
+                        }
+                    }
                 }
             }
+        }
+
+        private Point CalculatePerpendicularFoot(Measurement baseLine, Point point)
+        {
+            Point A = baseLine.Start;
+            Point B = baseLine.End;
+
+            double dx = B.X - A.X;
+            double dy = B.Y - A.Y;
+            double lengthSquared = dx * dx + dy * dy;
+
+            if (lengthSquared == 0) return A;
+
+            double t = ((point.X - A.X) * dx + (point.Y - A.Y) * dy) / lengthSquared;
+            t = Math.Max(0, Math.Min(1, t));
+
+            return new Point(
+                (int)(A.X + t * dx),
+                (int)(A.Y + t * dy)
+            );
         }
 
         private void DrawHoverLabel(Graphics g, Point point, string text)
@@ -1486,6 +1597,29 @@ namespace kinectProject
                         // Draw angle arc relative to axis
                         DrawAxisAngleArc(g, m);
                         break;
+
+                    case MeasurementType.PerpendicularLine:
+                        g.DrawLine(pen, m.Start, m.End);
+                        g.FillEllipse(brush, m.Start.X - pointSize / 2, m.Start.Y - pointSize / 2, pointSize, pointSize);
+                        g.FillEllipse(brush, m.End.X - pointSize / 2, m.End.Y - pointSize / 2, pointSize, pointSize);
+
+                        // Draw perpendicular symbol at the intersection point
+                        using (Pen perpendicularPen = new Pen(Color.White, 1))
+                        {
+                            int symbolSize = 4;
+                            g.DrawRectangle(perpendicularPen, m.Start.X - symbolSize, m.Start.Y - symbolSize, symbolSize * 2, symbolSize * 2);
+                        }
+
+                        // Draw ID
+                        string perpId = m.ID.ToString();
+                        SizeF perpTextSize = g.MeasureString(perpId, font);
+                        Point perpMidPoint = new Point((m.Start.X + m.End.X) / 2, (m.Start.Y + m.End.Y) / 2);
+                        RectangleF perpTextRect = new RectangleF(
+                            perpMidPoint.X - perpTextSize.Width / 2, perpMidPoint.Y - perpTextSize.Height - 10,
+                            perpTextSize.Width + 4, perpTextSize.Height);
+                        g.FillRectangle(bgBrush, perpTextRect);
+                        g.DrawString(perpId, font, textBrush, perpMidPoint.X - perpTextSize.Width / 2 + 2, perpMidPoint.Y - perpTextSize.Height - 8);
+                        break;
                 }
             }
         }
@@ -1590,6 +1724,7 @@ namespace kinectProject
                 case MeasurementType.AngleWithAxis: return Color.Blue;
                 case MeasurementType.Distance: return Color.Orange;
                 case MeasurementType.ReferenceLine: return Color.Red;
+                case MeasurementType.PerpendicularLine: return Color.Violet;
                 default: return Color.White;
             }
         }
@@ -1916,6 +2051,23 @@ namespace kinectProject
                         Point axisMidPoint = new Point((scaledStart.X + scaledEnd.X) / 2, (scaledStart.Y + scaledEnd.Y) / 2);
                         g.DrawString(axisAngleText, font, textBrush, axisMidPoint.X, axisMidPoint.Y - 15);
                         break;
+                    case MeasurementType.PerpendicularLine: // ← Ajouter ce cas
+                        g.DrawLine(pen, scaledStart, scaledEnd);
+                        g.FillEllipse(brush, scaledStart.X - pointSize / 2, scaledStart.Y - pointSize / 2, pointSize, pointSize);
+                        g.FillEllipse(brush, scaledEnd.X - pointSize / 2, scaledEnd.Y - pointSize / 2, pointSize, pointSize);
+
+                        double perpLength = CalculateDistance(m.Start, m.End);
+                        string perpText = $"{m.ID}: "; 
+
+                        Point perpMidPoint = new Point((scaledStart.X + scaledEnd.X) / 2, (scaledStart.Y + scaledEnd.Y) / 2);
+                        g.DrawString(perpText, font, textBrush, perpMidPoint.X, perpMidPoint.Y - 15);
+
+                        // Draw perpendicular symbol
+                        using (Pen symbolPen = new Pen(Color.Black, 1))
+                        {
+                            g.DrawRectangle(symbolPen, scaledStart.X - 2, scaledStart.Y - 2, 4, 4);
+                        }
+                        break;
                 }
             }
         }
@@ -1956,6 +2108,7 @@ namespace kinectProject
                 case MeasurementType.Line:
                 case MeasurementType.Distance:
                 case MeasurementType.ReferenceLine:
+                case MeasurementType.PerpendicularLine: // ← Ajouter cette ligne
                     double pixels = CalculateDistance(m.Start, m.End);
                     return $"{pixels:F1} px";
 
@@ -1975,6 +2128,7 @@ namespace kinectProject
             }
         }
 
+
         private string GetRealValueString(Measurement m)
         {
             if (!isReferenceSet && m.Type != MeasurementType.ReferenceLine)
@@ -1983,6 +2137,7 @@ namespace kinectProject
             switch (m.Type)
             {
                 case MeasurementType.Distance:
+                case MeasurementType.PerpendicularLine: // ← Ajouter cette ligne
                     double pixels = CalculateDistance(m.Start, m.End);
                     double realUnits = pixels / pixelToRealRatio;
                     return $"{realUnits:F2} cm";
@@ -2000,6 +2155,44 @@ namespace kinectProject
                 default:
                     return "-";
             }
+        }
+
+        private void CreatePerpendicularLine(Measurement baseLine, Point endPoint)
+        {
+            Point A = baseLine.Start;
+            Point B = baseLine.End;
+            Point C = endPoint;
+
+            // Calculate the perpendicular projection of point C onto line AB
+            double dx = B.X - A.X;
+            double dy = B.Y - A.Y;
+            double lengthSquared = dx * dx + dy * dy;
+
+            if (lengthSquared == 0) return; // Avoid division by zero
+
+            // Calculate projection parameter t
+            double t = ((C.X - A.X) * dx + (C.Y - A.Y) * dy) / lengthSquared;
+
+            // Clamp t to [0,1] to ensure the perpendicular foot is on the line segment
+            t = Math.Max(0, Math.Min(1, t));
+
+            // Calculate the perpendicular foot point
+            Point perpendicularFoot = new Point(
+                (int)(A.X + t * dx),
+                (int)(A.Y + t * dy)
+            );
+
+            // Create the perpendicular line measurement
+            Measurement perpendicularLine = new Measurement(
+                perpendicularFoot,
+                C,
+                $"P{measurementCounter++}",
+                MeasurementType.PerpendicularLine,
+                idCounter++
+            );
+
+            measurements.Add(perpendicularLine);
+            UpdateStatus($"Perpendicular line created (ID: {perpendicularLine.ID})");
         }
 
         // Dialog for axis selection
@@ -2176,6 +2369,127 @@ namespace kinectProject
         private void BodyPictureAnalyzer_Load(object sender, EventArgs e)
         {
 
+        }
+    }
+
+
+     class CustomColorTable : ProfessionalColorTable
+    {
+        // Couleur de fond des menus
+        public override Color ToolStripDropDownBackground
+        {
+            get { return Color.FromArgb(62, 62, 64); }
+        }
+
+        // Bordure des menus
+        public override Color MenuBorder
+        {
+            get { return Color.FromArgb(100, 100, 100); }
+        }
+
+        // Fond des items au survol
+        public override Color MenuItemSelected
+        {
+            get { return Color.FromArgb(87, 87, 90); }
+        }
+
+        // Dégradé pour les items sélectionnés (unie)
+        public override Color MenuItemSelectedGradientBegin
+        {
+            get { return Color.FromArgb(87, 87, 90); }
+        }
+
+        public override Color MenuItemSelectedGradientEnd
+        {
+            get { return Color.FromArgb(87, 87, 90); }
+        }
+
+        // Dégradé pour les items pressés (unie)
+        public override Color MenuItemPressedGradientBegin
+        {
+            get { return Color.FromArgb(75, 75, 78); }
+        }
+
+        public override Color MenuItemPressedGradientMiddle
+        {
+            get { return Color.FromArgb(75, 75, 78); }
+        }
+
+        public override Color MenuItemPressedGradientEnd
+        {
+            get { return Color.FromArgb(75, 75, 78); }
+        }
+
+        // Image margin
+        public override Color ImageMarginGradientBegin
+        {
+            get { return Color.FromArgb(55, 55, 58); }
+        }
+
+        public override Color ImageMarginGradientMiddle
+        {
+            get { return Color.FromArgb(55, 55, 58); }
+        }
+
+        public override Color ImageMarginGradientEnd
+        {
+            get { return Color.FromArgb(55, 55, 58); }
+        }
+    }
+
+    class CustomToolStripRenderer : ToolStripProfessionalRenderer
+    {
+        public CustomToolStripRenderer() : base(new CustomColorTable()) { }
+
+        protected override void OnRenderArrow(ToolStripArrowRenderEventArgs e)
+        {
+            e.ArrowColor = Color.White; // Flèche blanche pour les menus overflow
+            base.OnRenderArrow(e);
+        }
+
+        protected override void OnRenderItemText(ToolStripItemTextRenderEventArgs e)
+        {
+            e.TextColor = Color.White; // Texte toujours blanc
+            base.OnRenderItemText(e);
+        }
+
+        protected override void OnRenderOverflowButtonBackground(ToolStripItemRenderEventArgs e)
+        {
+            // Style personnalisé pour le bouton overflow
+            var rect = new System.Drawing.Rectangle(0, 0, e.Item.Width - 1, e.Item.Height - 1);
+            var buttonRect = new System.Drawing.Rectangle(rect.X - 5, rect.Y, rect.Width + 5, rect.Height);
+
+            // Fond du bouton overflow
+            using (var brush = new SolidBrush(Color.FromArgb(62, 62, 64)))
+                e.Graphics.FillRectangle(brush, buttonRect);
+
+            // Bordure
+            using (var pen = new Pen(Color.FromArgb(100, 100, 100)))
+                e.Graphics.DrawRectangle(pen, buttonRect);
+
+            // Dessiner les flèches
+            using (var pen = new Pen(Color.White, 2))
+            {
+                int arrowSize = 4;
+                int centerX = buttonRect.Width / 2 - 3;
+                int centerY = buttonRect.Height / 2;
+
+                // Flèche droite
+                e.Graphics.DrawLine(pen,
+                    centerX, centerY - arrowSize,
+                    centerX + arrowSize, centerY);
+                e.Graphics.DrawLine(pen,
+                    centerX + arrowSize, centerY,
+                    centerX, centerY + arrowSize);
+
+                // Flèche droite supplémentaire
+                e.Graphics.DrawLine(pen,
+                    centerX + 3, centerY - arrowSize,
+                    centerX + 3 + arrowSize, centerY);
+                e.Graphics.DrawLine(pen,
+                    centerX + 3 + arrowSize, centerY,
+                    centerX + 3, centerY + arrowSize);
+            }
         }
     }
 }
