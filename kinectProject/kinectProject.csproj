@@ -154,6 +154,9 @@
     </Compile>
     <Compile Include="Program.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
+    <Compile Include="ReferenceInputDialog.cs">
+      <SubType>Form</SubType>
+    </Compile>
     <EmbeddedResource Include="BodyPictureAnalyzer.resx">
       <DependentUpon>BodyPictureAnalyzer.cs</DependentUpon>
     </EmbeddedResource>

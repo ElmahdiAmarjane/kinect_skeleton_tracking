@@ -14,7 +14,7 @@ namespace kinectProject
     public partial class BodyPictureAnalyzer : Form
     {
         // Enums
-        private enum ToolMode { None, Line, Point, Angle, AngleWithAxis, Distance, Reference , Perpendicular }
+        private enum ToolMode { None, Line, Point, Angle, AngleWithAxis, Distance, Reference, Perpendicular }
         private enum EditMode { None, Move, Delete, Rename, Normal }
         private enum AxisType { X, Y }
 
@@ -26,9 +26,9 @@ namespace kinectProject
             public string Name;
             public MeasurementType Type;
             public bool IsSelected;
-            public AxisType? Axis; // For angle measurements
-            public Point? Vertex; // For angle measurements with two segments
-            public int ID; // Unique ID for each measurement
+            public AxisType? Axis;
+            public Point? Vertex;
+            public int ID;
 
             public Measurement(Point start, Point end, string name, MeasurementType type, int id)
             {
@@ -69,47 +69,59 @@ namespace kinectProject
         private Point? hoverPoint = null;
         private string hoverMeasurementName = "";
         private Measurement? hoverMeasurement = null;
-
-
         private Measurement? selectedLineForPerpendicular = null;
         private bool isSelectingBaseLine = false;
 
+        // Zoom state
+        private float zoomFactor = 1.0f;
+        private PointF panOffset = PointF.Empty;
+        private bool isPanning = false;
+        private Point panStart;
+        private Matrix transformMatrix = new Matrix();
+        private Matrix inverseTransform = new Matrix();
+
         // UI Controls
-        private PictureBox pictureBox;
+        protected DoubleBufferedPanel drawingPanel;
         private ToolStrip toolStrip;
         private StatusStrip statusStrip;
         private ListView measurementsList;
 
         public BodyPictureAnalyzer()
         {
-            // InitializeComponent();
+            InitializeComponents();
+            this.DoubleBuffered = true;
             SetupUI();
             UpdateStatus("Ready to import an image");
+        }
+
+        private void InitializeComponents()
+        {
+            this.SuspendLayout();
+            this.AutoScaleDimensions = new SizeF(6F, 13F);
+            this.AutoScaleMode = AutoScaleMode.Font;
+            this.ClientSize = new Size(1200, 800);
+            this.Name = "BodyPictureAnalyzer";
+            this.Text = "Advanced Image Measurement Tool with Zoom";
+            this.ResumeLayout(false);
         }
 
         private void SetupUI()
         {
             // Main form setup
-            this.Text = "Advanced Image Measurement Tool";
+            this.Text = "Advanced Image Measurement Tool with Zoom";
             this.Size = new Size(1200, 800);
             this.DoubleBuffered = true;
             this.BackColor = Color.FromArgb(45, 45, 48);
             this.ForeColor = Color.White;
 
-            //// Toolstrip setup
-            //toolStrip = new ToolStrip();
-            //toolStrip.Dock = DockStyle.Top;
-            //toolStrip.BackColor = Color.FromArgb(62, 62, 64);
-            //toolStrip.ForeColor = Color.White;
-            // Toolstrip setup - MODIFIER CETTE SECTION
+            // Toolstrip setup
             toolStrip = new ToolStrip();
             toolStrip.Dock = DockStyle.Top;
             toolStrip.BackColor = Color.FromArgb(62, 62, 64);
             toolStrip.ForeColor = Color.White;
             toolStrip.RenderMode = ToolStripRenderMode.Professional;
-
-            // Utiliser un renderer personnalisé pour contrôler l'apparence
             toolStrip.Renderer = new CustomToolStripRenderer();
+
             // Toolstrip buttons
             AddToolButton("📁 Import Image", BtnImport_Click);
             AddToolSeparator();
@@ -134,24 +146,30 @@ namespace kinectProject
             AddToolButton("🔲 Toggle Grid", BtnToggleGrid_Click);
             AddToolButton("📄 Export PDF", (s, e) => ExportToPdf());
 
-            // Picture box setup
-            pictureBox = new PictureBox();
-            pictureBox.Dock = DockStyle.Fill;
-            pictureBox.BackColor = Color.FromArgb(37, 37, 38);
-            pictureBox.BorderStyle = BorderStyle.FixedSingle;
-            pictureBox.SizeMode = PictureBoxSizeMode.Zoom;
-            pictureBox.MouseClick += PictureBox_MouseClick;
-            pictureBox.MouseDown += PictureBox_MouseDown;
-            pictureBox.MouseMove += PictureBox_MouseMove;
-            pictureBox.MouseUp += PictureBox_MouseUp;
-            pictureBox.Paint += PictureBox_Paint;
-            pictureBox.MouseLeave += (s, e) => {
-                hoverPoint = null;
-                hoverMeasurement = null;
-                pictureBox.Invalidate();
-            };
+            // Zoom controls
+            AddToolSeparator();
+            AddToolButton("🔍 Zoom In", BtnZoomIn_Click);
+            AddToolButton("🔍 Zoom Out", BtnZoomOut_Click);
+            AddToolButton("🔍 Zoom Fit", BtnZoomFit_Click);
+            AddToolButton("🔍 Zoom 100%", BtnZoomReset_Click);
+            AddToolButton("✋ Pan", BtnPan_Click);
 
-            // Measurements list (ListView for professional look)
+            // Drawing panel - Using DoubleBufferedPanel for smooth zoom
+            drawingPanel = new DoubleBufferedPanel();
+            drawingPanel.Dock = DockStyle.Fill;
+            drawingPanel.BackColor = Color.FromArgb(37, 37, 38);
+            drawingPanel.BorderStyle = BorderStyle.FixedSingle;
+
+            drawingPanel.Paint += DrawingPanel_Paint;
+            drawingPanel.MouseClick += DrawingPanel_MouseClick;
+            drawingPanel.MouseDown += DrawingPanel_MouseDown;
+            drawingPanel.MouseMove += DrawingPanel_MouseMove;
+            drawingPanel.MouseUp += DrawingPanel_MouseUp;
+            drawingPanel.MouseWheel += DrawingPanel_MouseWheel;
+            drawingPanel.MouseLeave += DrawingPanel_MouseLeave;
+            drawingPanel.Resize += DrawingPanel_Resize;
+
+            // Measurements list
             measurementsList = new ListView();
             measurementsList.Dock = DockStyle.Right;
             measurementsList.Width = 350;
@@ -178,10 +196,24 @@ namespace kinectProject
             statusStrip.ForeColor = Color.White;
 
             // Add controls to form
-            this.Controls.Add(pictureBox);
+            this.Controls.Add(drawingPanel);
             this.Controls.Add(measurementsList);
             this.Controls.Add(toolStrip);
             this.Controls.Add(statusStrip);
+
+            // Initialize grid origin
+            gridOrigin = new Point(drawingPanel.Width / 2, drawingPanel.Height / 2);
+            UpdateTransformationMatrices();
+        }
+
+        private void DrawingPanel_Resize(object sender, EventArgs e)
+        {
+            drawingPanel.Invalidate();
+        }
+
+        private void BodyPictureAnalyzer_Load(object sender, EventArgs e)
+        {
+            UpdateStatus("Application started. Import an image to begin.");
         }
 
         private void AddToolButton(string text, EventHandler handler)
@@ -202,6 +234,914 @@ namespace kinectProject
             toolStrip.Items.Add(separator);
         }
 
+        #region Zoom and Pan Methods
+
+        private void BtnZoomIn_Click(object sender, EventArgs e)
+        {
+            ZoomAtCenter(1.25f);
+        }
+
+        private void BtnZoomOut_Click(object sender, EventArgs e)
+        {
+            ZoomAtCenter(0.8f);
+        }
+
+        private void BtnZoomReset_Click(object sender, EventArgs e)
+        {
+            zoomFactor = 1.0f;
+            panOffset = PointF.Empty;
+            UpdateTransformationMatrices();
+            drawingPanel.Invalidate();
+            UpdateStatus("Zoom reset to 100%");
+        }
+
+        private void BtnZoomFit_Click(object sender, EventArgs e)
+        {
+            if (originalImage == null) return;
+
+            float scaleX = (float)drawingPanel.Width / originalImage.Width;
+            float scaleY = (float)drawingPanel.Height / originalImage.Height;
+            zoomFactor = Math.Min(scaleX, scaleY) * 0.95f;
+            panOffset = PointF.Empty;
+
+            UpdateTransformationMatrices();
+            drawingPanel.Invalidate();
+            UpdateStatus($"Zoom fit: {zoomFactor * 100:F0}%");
+        }
+
+        private void BtnPan_Click(object sender, EventArgs e)
+        {
+            isPanning = !isPanning;
+            drawingPanel.Cursor = isPanning ? Cursors.SizeAll : Cursors.Default;
+            UpdateStatus(isPanning ? "Pan mode: Click and drag to move the view" : "Pan mode disabled");
+        }
+
+        private void DrawingPanel_MouseWheel(object sender, MouseEventArgs e)
+        {
+            if (originalImage == null) return;
+
+            float zoom = e.Delta > 0 ? 1.25f : 0.8f;
+            ZoomAtPoint(e.Location, zoom);
+        }
+
+        private void ZoomAtCenter(float zoom)
+        {
+            PointF center = new PointF(drawingPanel.Width / 2, drawingPanel.Height / 2);
+            ZoomAtPoint(center, zoom);
+        }
+
+        private void ZoomAtPoint(PointF point, float zoom)
+        {
+            float oldZoom = zoomFactor;
+            zoomFactor *= zoom;
+            zoomFactor = Math.Max(0.1f, Math.Min(20f, zoomFactor));
+
+            if (oldZoom != zoomFactor)
+            {
+                // Calculate the point in image coordinates before zoom
+                PointF imagePointBefore = TransformPointToImage(point);
+
+                // Update transformation
+                UpdateTransformationMatrices();
+
+                // Calculate the same point in image coordinates after zoom
+                PointF imagePointAfter = TransformPointToImage(point);
+
+                // Adjust pan offset to keep the point under the mouse
+                panOffset.X += (imagePointAfter.X - imagePointBefore.X) * zoomFactor;
+                panOffset.Y += (imagePointAfter.Y - imagePointBefore.Y) * zoomFactor;
+
+                UpdateTransformationMatrices();
+                drawingPanel.Invalidate();
+                UpdateStatus($"Zoom: {zoomFactor * 100:F0}%");
+            }
+        }
+
+        private void UpdateTransformationMatrices()
+        {
+            transformMatrix = new Matrix();
+            transformMatrix.Translate(panOffset.X, panOffset.Y);
+            transformMatrix.Scale(zoomFactor, zoomFactor);
+
+            inverseTransform = transformMatrix.Clone();
+            inverseTransform.Invert();
+        }
+
+        private PointF TransformPointToImage(PointF screenPoint)
+        {
+            PointF[] points = new PointF[] { screenPoint };
+            inverseTransform.TransformPoints(points);
+            return points[0];
+        }
+
+        private PointF TransformPointToScreen(PointF imagePoint)
+        {
+            PointF[] points = new PointF[] { imagePoint };
+            transformMatrix.TransformPoints(points);
+            return points[0];
+        }
+
+        #endregion
+
+        #region Drawing Methods
+
+        private void DrawingPanel_Paint(object sender, PaintEventArgs e)
+        {
+            try
+            {
+                e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+                e.Graphics.CompositingQuality = CompositingQuality.HighQuality;
+                e.Graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
+
+                // Clear the panel first
+                e.Graphics.Clear(drawingPanel.BackColor);
+
+                if (originalImage == null)
+                {
+                    // Draw placeholder text when no image is loaded
+                    string message = "No image loaded. Click 'Import Image' to begin.";
+                    using (System.Drawing.Font font = new System.Drawing.Font("Arial", 14, FontStyle.Bold))
+                    using (Brush brush = new SolidBrush(Color.White))
+                    {
+                        SizeF textSize = e.Graphics.MeasureString(message, font);
+                        PointF position = new PointF(
+                            (drawingPanel.Width - textSize.Width) / 2,
+                            (drawingPanel.Height - textSize.Height) / 2
+                        );
+                        e.Graphics.DrawString(message, font, brush, position);
+                    }
+                    return;
+                }
+
+                // Apply zoom transformation
+                e.Graphics.Transform = transformMatrix;
+
+                // Draw the image
+                e.Graphics.DrawImage(originalImage, 0, 0, originalImage.Width, originalImage.Height);
+
+                // Draw grid if enabled
+                if (showGrid)
+                {
+                    DrawGrid(e.Graphics);
+                }
+
+                // Draw measurements
+                foreach (var m in measurements)
+                {
+                    DrawMeasurement(e.Graphics, m);
+                }
+
+                // Draw current tool preview
+                if (currentTool != ToolMode.None)
+                {
+                    DrawCurrentToolPreview(e.Graphics);
+                }
+
+                // Reset transformation for UI elements that need screen coordinates
+                e.Graphics.ResetTransform();
+
+                // Draw hover information
+                if (hoverPoint.HasValue && !string.IsNullOrEmpty(hoverMeasurementName))
+                {
+                    PointF screenHoverPoint = TransformPointToScreen(hoverPoint.Value);
+                    DrawHoverLabel(e.Graphics, new Point((int)screenHoverPoint.X, (int)screenHoverPoint.Y), hoverMeasurementName);
+                }
+
+                // Draw zoom level
+                DrawZoomLevel(e.Graphics);
+            }
+            catch (Exception ex)
+            {
+                // Handle drawing errors gracefully
+                Debug.WriteLine($"Drawing error: {ex.Message}");
+
+                // Draw error message
+                using (System.Drawing.Font font = new System.Drawing.Font("Arial", 12))
+                using (Brush brush = new SolidBrush(Color.Red))
+                {
+                    e.Graphics.DrawString("Drawing error occurred", font, brush, 10, 10);
+                }
+            }
+        }
+
+        private void DrawCurrentToolPreview(Graphics g)
+        {
+            Point currentPos = drawingPanel.PointToClient(Cursor.Position);
+            PointF imageCurrentPos = TransformPointToImage(currentPos);
+
+            // Validate points before using them
+            if (float.IsNaN(imageCurrentPos.X) || float.IsNaN(imageCurrentPos.Y))
+                return;
+
+            using (Pen tempPen = new Pen(Color.Yellow, 2) { DashStyle = DashStyle.Dash })
+            {
+                if (currentTool == ToolMode.Angle)
+                {
+                    if (angleVertex.HasValue && angleFirstPoint.HasValue)
+                    {
+                        // Validate all points
+                        if (IsValidPoint(angleVertex.Value) && IsValidPoint(angleFirstPoint.Value))
+                        {
+                            g.DrawLine(tempPen, angleVertex.Value, angleFirstPoint.Value);
+                            g.DrawLine(tempPen, angleVertex.Value, imageCurrentPos);
+                            DrawAngleArcPreview(g, angleVertex.Value, angleFirstPoint.Value, imageCurrentPos);
+                        }
+                    }
+                    else if (angleVertex.HasValue && IsValidPoint(angleVertex.Value))
+                    {
+                        g.DrawLine(tempPen, angleVertex.Value, imageCurrentPos);
+                    }
+                }
+                else if (currentTool == ToolMode.AngleWithAxis)
+                {
+                    if (currentStartPoint.HasValue)
+                    {
+                        g.DrawLine(tempPen, currentStartPoint.Value, imageCurrentPos);
+                    }
+                }
+                else if (currentStartPoint.HasValue && IsValidPoint(currentStartPoint.Value))
+                {
+                    g.DrawLine(tempPen, currentStartPoint.Value, imageCurrentPos);
+
+                    // Draw helper for 90° angles
+                    if (currentTool == ToolMode.Line || currentTool == ToolMode.Distance)
+                    {
+                        DrawAngleHelpers(g, currentStartPoint.Value, new Point((int)imageCurrentPos.X, (int)imageCurrentPos.Y));
+                    }
+                }
+                else if (currentTool == ToolMode.Perpendicular && isSelectingBaseLine && selectedLineForPerpendicular.HasValue)
+                {
+                    Point foot;
+
+                    if (selectedLineForPerpendicular.Value.Type == MeasurementType.Angle && selectedLineForPerpendicular.Value.Vertex.HasValue)
+                    {
+                        // For angle segments, use vertex and endpoint
+                        foot = CalculatePerpendicularFoot(
+                            new Measurement(selectedLineForPerpendicular.Value.Vertex.Value,
+                                          selectedLineForPerpendicular.Value.End,
+                                          "", MeasurementType.Line, 0),
+                            new Point((int)imageCurrentPos.X, (int)imageCurrentPos.Y));
+                    }
+                    else
+                    {
+                        // For regular lines
+                        foot = CalculatePerpendicularFoot(selectedLineForPerpendicular.Value,
+                                                        new Point((int)imageCurrentPos.X, (int)imageCurrentPos.Y));
+                    }
+
+                    if (IsValidPoint(foot))
+                    {
+                        using (Pen previewPen = new Pen(Color.Cyan, 2) { DashStyle = DashStyle.Dash })
+                        {
+                            g.DrawLine(previewPen, foot, imageCurrentPos);
+                        }
+
+                        // Draw perpendicular symbol
+                        using (Brush symbolBrush = new SolidBrush(Color.Cyan))
+                        {
+                            g.FillRectangle(symbolBrush, foot.X - 3, foot.Y - 3, 6, 6);
+                        }
+                    }
+                }
+
+            }
+        }
+
+        // Helper method to validate points
+        private bool IsValidPoint(Point point)
+        {
+            return !float.IsNaN(point.X) && !float.IsNaN(point.Y) &&
+                   !float.IsInfinity(point.X) && !float.IsInfinity(point.Y);
+        }
+
+        private bool IsValidPoint(PointF point)
+        {
+            return !float.IsNaN(point.X) && !float.IsNaN(point.Y) &&
+                   !float.IsInfinity(point.X) && !float.IsInfinity(point.Y);
+        }
+
+        private void DrawGrid(Graphics g)
+        {
+            using (Pen gridPen = new Pen(Color.FromArgb(100, Color.LightBlue)))
+            using (Pen axisPen = new Pen(Color.Red, 1.5f))
+            {
+                gridPen.DashStyle = DashStyle.Dot;
+
+                // Calculate visible area in image coordinates
+                PointF topLeft = TransformPointToImage(new Point(0, 0));
+                PointF bottomRight = TransformPointToImage(new Point(drawingPanel.Width, drawingPanel.Height));
+
+                // Extended grid boundaries (larger than visible area for panning)
+                int startX = (int)(topLeft.X / 50) * 50 - 100;
+                int endX = (int)(bottomRight.X / 50) * 50 + 100;
+                int startY = (int)(topLeft.Y / 50) * 50 - 100;
+                int endY = (int)(bottomRight.Y / 50) * 50 + 100;
+
+                // Draw vertical grid lines
+                for (int x = startX; x <= endX; x += 50)
+                {
+                    if (x >= -1000 && x <= 10000) // Reasonable limits
+                    {
+                        g.DrawLine(gridPen, x, startY, x, endY);
+                    }
+                }
+
+                // Draw horizontal grid lines
+                for (int y = startY; y <= endY; y += 50)
+                {
+                    if (y >= -1000 && y <= 10000) // Reasonable limits
+                    {
+                        g.DrawLine(gridPen, startX, y, endX, y);
+                    }
+                }
+
+                // Draw axes
+                g.DrawLine(axisPen, gridOrigin.X, startY, gridOrigin.X, endY);
+                g.DrawLine(axisPen, startX, gridOrigin.Y, endX, gridOrigin.Y);
+
+                // Draw grid origin point
+                g.FillEllipse(Brushes.Red, gridOrigin.X - 5, gridOrigin.Y - 5, 10, 10);
+            }
+        }
+
+        private void DrawMeasurement(Graphics g, Measurement m)
+        {
+            Color color = m.IsSelected ? Color.Yellow : GetMeasurementColor(m.Type);
+
+            // Adjust sizes based on zoom
+            int lineWidth = Math.Max(1, (int)((m.IsSelected ? 3 : 2) / zoomFactor));
+            int pointSize = Math.Max(3, (int)((m.IsSelected ? 8 : 6) / zoomFactor));
+            float fontSize = Math.Max(6, 9 / zoomFactor);
+
+            using (Pen pen = new Pen(color, lineWidth))
+            using (Brush brush = new SolidBrush(color))
+            using (System.Drawing.Font font = new System.Drawing.Font("Arial", fontSize, FontStyle.Bold))
+            using (Brush textBrush = new SolidBrush(Color.White))
+            using (Brush bgBrush = new SolidBrush(Color.FromArgb(200, Color.Black)))
+            {
+                switch (m.Type)
+                {
+                    case MeasurementType.Point:
+                        g.FillEllipse(brush, m.Start.X - pointSize / 2, m.Start.Y - pointSize / 2, pointSize, pointSize);
+
+                        string pointId = m.ID.ToString();
+                        SizeF idSize = g.MeasureString(pointId, font);
+                        RectangleF idRect = new RectangleF(
+                            m.Start.X + 8, m.Start.Y - idSize.Height / 2,
+                            idSize.Width + 4, idSize.Height);
+                        g.FillRectangle(bgBrush, idRect);
+                        g.DrawString(pointId, font, textBrush, m.Start.X + 10, m.Start.Y - idSize.Height / 2);
+                        break;
+
+                    case MeasurementType.Line:
+                        g.DrawLine(pen, m.Start, m.End);
+                        g.FillEllipse(brush, m.Start.X - pointSize / 2, m.Start.Y - pointSize / 2, pointSize, pointSize);
+                        g.FillEllipse(brush, m.End.X - pointSize / 2, m.End.Y - pointSize / 2, pointSize, pointSize);
+
+                        string lineId = m.ID.ToString();
+                        SizeF lineIdSize = g.MeasureString(lineId, font);
+                        PointF lineMidPoint = new PointF((m.Start.X + m.End.X) / 2, (m.Start.Y + m.End.Y) / 2);
+                        RectangleF lineIdRect = new RectangleF(
+                            lineMidPoint.X - lineIdSize.Width / 2, lineMidPoint.Y - lineIdSize.Height - 10,
+                            lineIdSize.Width + 4, lineIdSize.Height);
+                        g.FillRectangle(bgBrush, lineIdRect);
+                        g.DrawString(lineId, font, textBrush, lineMidPoint.X - lineIdSize.Width / 2 + 2, lineMidPoint.Y - lineIdSize.Height - 8);
+                        break;
+
+                    case MeasurementType.Distance:
+                    case MeasurementType.ReferenceLine:
+                        g.DrawLine(pen, m.Start, m.End);
+                        g.FillEllipse(brush, m.Start.X - pointSize / 2, m.Start.Y - pointSize / 2, pointSize, pointSize);
+                        g.FillEllipse(brush, m.End.X - pointSize / 2, m.End.Y - pointSize / 2, pointSize, pointSize);
+
+                        double distance = CalculateDistance(m.Start, m.End);
+                        string distText = m.Type == MeasurementType.ReferenceLine ?
+                            $"{m.ID}: {distance / pixelToRealRatio:F1} cm" :
+                            isReferenceSet ? $"{m.ID}" : $"{m.ID}";
+
+                        PointF midPoint = new PointF((m.Start.X + m.End.X) / 2, (m.Start.Y + m.End.Y) / 2);
+                        SizeF textSize = g.MeasureString(distText, font);
+                        RectangleF textRect = new RectangleF(
+                            midPoint.X - textSize.Width / 2, midPoint.Y - textSize.Height - 10,
+                            textSize.Width + 4, textSize.Height);
+                        g.FillRectangle(bgBrush, textRect);
+                        g.DrawString(distText, font, textBrush, midPoint.X - textSize.Width / 2 + 2, midPoint.Y - textSize.Height - 8);
+                        break;
+
+                    case MeasurementType.Angle:
+                        if (m.Vertex.HasValue)
+                        {
+                            // Draw the segment
+                            g.DrawLine(pen, m.Vertex.Value, m.End);
+                            g.FillEllipse(brush, m.Vertex.Value.X - pointSize / 2, m.Vertex.Value.Y - pointSize / 2, pointSize, pointSize);
+                            g.FillEllipse(brush, m.End.X - pointSize / 2, m.End.Y - pointSize / 2, pointSize, pointSize);
+
+                            // Find the other segment that shares the same vertex and ID
+                            Measurement otherSegment = measurements.FirstOrDefault(meas =>
+                                meas.Type == MeasurementType.Angle &&
+                                meas.Vertex.HasValue &&
+                                meas.Vertex.Value == m.Vertex.Value &&
+                                meas.ID == m.ID &&
+                                meas.End != m.End);
+
+                            if (otherSegment.Type == MeasurementType.Angle)
+                            {
+                                // Draw angle value at vertex with ID
+                                double angle = CalculateAngle(m, otherSegment);
+                                string angleText = $"{m.ID}: {angle:F1}°";
+
+                                SizeF angleTextSize = g.MeasureString(angleText, font);
+                                RectangleF angleTextRect = new RectangleF(
+                                    m.Vertex.Value.X - angleTextSize.Width / 2,
+                                    m.Vertex.Value.Y - angleTextSize.Height - 20,
+                                    angleTextSize.Width + 4,
+                                    angleTextSize.Height);
+                                g.FillRectangle(bgBrush, angleTextRect);
+                                g.DrawString(angleText, font, textBrush,
+                                    m.Vertex.Value.X - angleTextSize.Width / 2 + 2,
+                                    m.Vertex.Value.Y - angleTextSize.Height - 18);
+
+                                // Draw angle arc
+                                DrawAngleArc(g, m, otherSegment);
+                            }
+                        }
+                        break;
+
+                    case MeasurementType.AngleWithAxis:
+                        g.DrawLine(pen, m.Start, m.End);
+                        g.FillEllipse(brush, m.Start.X - pointSize / 2, m.Start.Y - pointSize / 2, pointSize, pointSize);
+                        g.FillEllipse(brush, m.End.X - pointSize / 2, m.End.Y - pointSize / 2, pointSize, pointSize);
+
+                        // Draw angle value with ID
+                        double axisAngle = CalculateAngleWithAxis(m);
+                        string axisAngleText = $"{m.ID}: {axisAngle:F1}° to {m.Axis}";
+
+                        SizeF axisTextSize = g.MeasureString(axisAngleText, font);
+                        Point lineMidPoint1 = new Point(
+                            (m.Start.X + m.End.X) / 2,
+                            (m.Start.Y + m.End.Y) / 2);
+                        RectangleF axisTextRect = new RectangleF(
+                            lineMidPoint1.X - axisTextSize.Width / 2,
+                            lineMidPoint1.Y - axisTextSize.Height - 10,
+                            axisTextSize.Width + 4,
+                            axisTextSize.Height);
+                        g.FillRectangle(bgBrush, axisTextRect);
+                        g.DrawString(axisAngleText, font, textBrush,
+                            lineMidPoint1.X - axisTextSize.Width / 2 + 2,
+                            lineMidPoint1.Y - axisTextSize.Height - 8);
+
+                        // Draw angle arc relative to axis
+                        DrawAxisAngleArc(g, m);
+                        break;
+
+                    case MeasurementType.PerpendicularLine:
+                        g.DrawLine(pen, m.Start, m.End);
+                        g.FillEllipse(brush, m.Start.X - pointSize / 2, m.Start.Y - pointSize / 2, pointSize, pointSize);
+                        g.FillEllipse(brush, m.End.X - pointSize / 2, m.End.Y - pointSize / 2, pointSize, pointSize);
+
+                        // Draw perpendicular symbol at the intersection point
+                        using (Pen perpendicularPen = new Pen(Color.White, 1))
+                        {
+                            int symbolSize = 4;
+                            g.DrawRectangle(perpendicularPen, m.Start.X - symbolSize, m.Start.Y - symbolSize, symbolSize * 2, symbolSize * 2);
+                        }
+
+                        // Draw ID
+                        string perpId = m.ID.ToString();
+                        SizeF perpTextSize = g.MeasureString(perpId, font);
+                        Point perpMidPoint = new Point((m.Start.X + m.End.X) / 2, (m.Start.Y + m.End.Y) / 2);
+                        RectangleF perpTextRect = new RectangleF(
+                            perpMidPoint.X - perpTextSize.Width / 2, perpMidPoint.Y - perpTextSize.Height - 10,
+                            perpTextSize.Width + 4, perpTextSize.Height);
+                        g.FillRectangle(bgBrush, perpTextRect);
+                        g.DrawString(perpId, font, textBrush, perpMidPoint.X - perpTextSize.Width / 2 + 2, perpMidPoint.Y - perpTextSize.Height - 8);
+                        break;
+                }
+            }
+        }
+
+        private void DrawHoverLabel(Graphics g, Point point, string text)
+        {
+            using (System.Drawing.Font font = new System.Drawing.Font("Arial", 9, FontStyle.Bold))
+            using (Brush textBrush = new SolidBrush(Color.White))
+            using (Brush bgBrush = new SolidBrush(Color.FromArgb(220, 0, 0, 0)))
+            {
+                SizeF textSize = g.MeasureString(text, font);
+
+                RectangleF textRect = new RectangleF(
+                    point.X - textSize.Width / 2,
+                    point.Y - textSize.Height - 15,
+                    textSize.Width + 8,
+                    textSize.Height + 4);
+
+                g.FillRectangle(bgBrush, textRect);
+                g.DrawRectangle(Pens.White, textRect.X, textRect.Y, textRect.Width, textRect.Height);
+
+                g.DrawString(text, font, textBrush,
+                    point.X - textSize.Width / 2 + 4,
+                    point.Y - textSize.Height - 13);
+            }
+        }
+
+        private void DrawZoomLevel(Graphics g)
+        {
+            string zoomText = $"Zoom: {zoomFactor * 100:F0}%";
+            using (System.Drawing.Font font = new System.Drawing.Font("Arial", 10, FontStyle.Bold))
+            using (Brush brush = new SolidBrush(Color.White))
+            using (Brush bgBrush = new SolidBrush(Color.FromArgb(150, 0, 0, 0)))
+            {
+                SizeF textSize = g.MeasureString(zoomText, font);
+                RectangleF textRect = new RectangleF(10, 10, textSize.Width + 8, textSize.Height + 4);
+                g.FillRectangle(bgBrush, textRect);
+                g.DrawString(zoomText, font, brush, 12, 12);
+            }
+        }
+
+        private void DrawAngleArcPreview(Graphics g, PointF vertex, PointF point1, PointF point2)
+        {
+            try
+            {
+                PointF v1 = new PointF(point1.X - vertex.X, point1.Y - vertex.Y);
+                PointF v2 = new PointF(point2.X - vertex.X, point2.Y - vertex.Y);
+
+                double angle1 = Math.Atan2(v1.Y, v1.X) * (180 / Math.PI);
+                double angle2 = Math.Atan2(v2.Y, v2.X) * (180 / Math.PI);
+
+                float startAngle = (float)Math.Min(angle1, angle2);
+                float sweepAngle = (float)Math.Abs(angle1 - angle2);
+
+                // Validate parameters before drawing
+                if (!float.IsNaN(startAngle) && !float.IsNaN(sweepAngle) &&
+                    !float.IsInfinity(startAngle) && !float.IsInfinity(sweepAngle))
+                {
+                    using (Pen arcPen = new Pen(Color.FromArgb(150, Color.Orange), 2))
+                    {
+                        arcPen.DashStyle = DashStyle.Dash;
+
+                        // Use valid rectangle dimensions
+                        float radius = 30f;
+                        RectangleF arcRect = new RectangleF(
+                            vertex.X - radius,
+                            vertex.Y - radius,
+                            radius * 2,
+                            radius * 2);
+
+                        // Ensure rectangle has positive dimensions
+                        if (arcRect.Width > 0 && arcRect.Height > 0)
+                        {
+                            g.DrawArc(arcPen, arcRect, startAngle, sweepAngle);
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                // Silently handle drawing errors to prevent crashes
+                Debug.WriteLine($"Error drawing angle arc: {ex.Message}");
+            }
+        }
+
+        private void DrawAngleHelpers(Graphics g, Point start, Point end)
+        {
+            // Calculate potential perpendicular endpoints for 90° assistance
+            int dx = end.X - start.X;
+            int dy = end.Y - start.Y;
+
+            // Horizontal helper
+            Point horizontalEnd = new Point(end.X, start.Y);
+            using (Pen helperPen = new Pen(Color.FromArgb(100, Color.Green)) { DashStyle = DashStyle.Dot })
+            {
+                g.DrawLine(helperPen, start, horizontalEnd);
+            }
+
+            // Vertical helper
+            Point verticalEnd = new Point(start.X, end.Y);
+            using (Pen helperPen = new Pen(Color.FromArgb(100, Color.Blue)) { DashStyle = DashStyle.Dot })
+            {
+                g.DrawLine(helperPen, start, verticalEnd);
+            }
+
+            // Show angle information
+            double angle = Math.Atan2(dy, dx) * (180 / Math.PI);
+            using (System.Drawing.Font font = new System.Drawing.Font("Arial", 9))
+            using (Brush brush = new SolidBrush(Color.White))
+            using (Brush bgBrush = new SolidBrush(Color.FromArgb(128, Color.Black)))
+            {
+                string angleText = $"{angle:F1}°";
+                SizeF textSize = g.MeasureString(angleText, font);
+                Point midPoint = new Point((start.X + end.X) / 2, (start.Y + end.Y) / 2);
+
+                RectangleF textRect = new RectangleF(
+                    midPoint.X - textSize.Width / 2,
+                    midPoint.Y - textSize.Height - 5,
+                    textSize.Width + 4,
+                    textSize.Height);
+
+                g.FillRectangle(bgBrush, textRect);
+                g.DrawString(angleText, font, brush, midPoint.X - textSize.Width / 2 + 2, midPoint.Y - textSize.Height - 3);
+            }
+        }
+
+        private void DrawAngleArc(Graphics g, Measurement m1, Measurement m2)
+        {
+            if (m1.Type != MeasurementType.Angle || !m1.Vertex.HasValue ||
+                m2.Type != MeasurementType.Angle || !m2.Vertex.HasValue) return;
+
+            // Calculate vectors from vertex to endpoints
+            Point v1 = new Point(m1.End.X - m1.Vertex.Value.X, m1.End.Y - m1.Vertex.Value.Y);
+            Point v2 = new Point(m2.End.X - m2.Vertex.Value.X, m2.End.Y - m2.Vertex.Value.Y);
+
+            // Calculate angles in degrees (0 to 360)
+            double angle1 = Math.Atan2(v1.Y, v1.X) * (180 / Math.PI);
+            double angle2 = Math.Atan2(v2.Y, v2.X) * (180 / Math.PI);
+
+            // Ensure angles are positive (0 to 360)
+            if (angle1 < 0) angle1 += 360;
+            if (angle2 < 0) angle2 += 360;
+
+            // Determine start angle and sweep angle
+            float startAngle, sweepAngle;
+
+            // Calculate the smaller angle between the two vectors
+            double diff = Math.Abs(angle1 - angle2);
+            double smallerAngle = Math.Min(diff, 360 - diff);
+
+            // Always draw the smaller angle (the actual angle between the segments)
+            if (diff <= 180)
+            {
+                startAngle = (float)Math.Min(angle1, angle2);
+                sweepAngle = (float)Math.Abs(angle1 - angle2);
+            }
+            else
+            {
+                // For angles > 180, we need to draw the complementary angle
+                // but we want to show the actual smaller angle
+                startAngle = (float)Math.Max(angle1, angle2);
+                sweepAngle = (float)(360 - Math.Abs(angle1 - angle2));
+
+                // Adjust to always show the interior angle
+                if (sweepAngle > 180) sweepAngle = 360 - sweepAngle;
+            }
+
+            using (Pen arcPen = new Pen(Color.FromArgb(100, Color.Orange), 2))
+            {
+                arcPen.DashStyle = DashStyle.Dash;
+                g.DrawArc(arcPen, m1.Vertex.Value.X - 30, m1.Vertex.Value.Y - 30, 60, 60, startAngle, sweepAngle);
+            }
+        }
+
+        private void DrawAxisAngleArc(Graphics g, Measurement m)
+        {
+            if (m.Type != MeasurementType.AngleWithAxis || !m.Axis.HasValue) return;
+
+            double angle = CalculateAngleWithAxis(m);
+            float startAngle = 0;
+            float sweepAngle = (float)angle;
+
+            if (m.Axis == AxisType.X)
+            {
+                startAngle = 0;
+            }
+            else
+            {
+                startAngle = 90;
+            }
+
+            Point lineMidPoint = new Point(
+                (m.Start.X + m.End.X) / 2,
+                (m.Start.Y + m.End.Y) / 2);
+
+            using (Pen arcPen = new Pen(Color.FromArgb(100, Color.Orange), 2))
+            {
+                arcPen.DashStyle = DashStyle.Dash;
+                g.DrawArc(arcPen, lineMidPoint.X - 30, lineMidPoint.Y - 30, 60, 60, startAngle, sweepAngle);
+            }
+        }
+
+        private Color GetMeasurementColor(MeasurementType type)
+        {
+            switch (type)
+            {
+                case MeasurementType.Line: return Color.LimeGreen;
+                case MeasurementType.Point: return Color.Magenta;
+                case MeasurementType.Angle: return Color.Cyan;
+                case MeasurementType.AngleWithAxis: return Color.Blue;
+                case MeasurementType.Distance: return Color.Orange;
+                case MeasurementType.ReferenceLine: return Color.Red;
+                case MeasurementType.PerpendicularLine: return Color.Violet;
+                default: return Color.White;
+            }
+        }
+
+        #endregion
+
+        #region Mouse Event Handlers
+
+        private void DrawingPanel_MouseDown(object sender, MouseEventArgs e)
+        {
+            if (originalImage == null) return;
+
+            if (e.Button == MouseButtons.Left && isPanning)
+            {
+                panStart = e.Location;
+                return;
+            }
+
+            if (e.Button == MouseButtons.Left)
+            {
+                PointF imagePointF = TransformPointToImage(e.Location);
+                Point imagePoint = new Point((int)imagePointF.X, (int)imagePointF.Y);
+
+                // FIX: Check if clicking near grid origin for dragging
+                PointF screenGridOrigin = TransformPointToScreen(gridOrigin);
+                if (IsNearPoint(e.Location, new Point((int)screenGridOrigin.X, (int)screenGridOrigin.Y), gridGrabRadius))
+                {
+                    isDraggingGrid = true;
+                    drawingPanel.Cursor = Cursors.SizeAll;
+                    return;
+                }
+
+                // Handle measurement selection for moving
+                if (currentEditMode == EditMode.Move)
+                {
+                    int index = FindMeasurementAtPoint(imagePoint);
+                    if (index >= 0)
+                    {
+                        DeselectAllMeasurements();
+                        Measurement m = measurements[index];
+                        m.IsSelected = true;
+                        measurements[index] = m;
+                        selectedMeasurementIndex = index;
+                        selectedMeasurement = m;
+
+                        // Calculate offset based on where the user clicked on the measurement
+                        if (m.Type == MeasurementType.Point)
+                        {
+                            dragOffset = new Point(
+                                imagePoint.X - m.Start.X,
+                                imagePoint.Y - m.Start.Y);
+                        }
+                        else
+                        {
+                            // For lines, find the closest point to where user clicked
+                            double distanceToStart = CalculateDistance(imagePoint, m.Start);
+                            double distanceToEnd = CalculateDistance(imagePoint, m.End);
+
+                            if (distanceToStart < distanceToEnd)
+                            {
+                                // User clicked near the start point
+                                dragOffset = new Point(
+                                    imagePoint.X - m.Start.X,
+                                    imagePoint.Y - m.Start.Y);
+                            }
+                            else
+                            {
+                                // User clicked near the end point
+                                dragOffset = new Point(
+                                    imagePoint.X - m.End.X,
+                                    imagePoint.Y - m.End.Y);
+                            }
+                        }
+
+                        isDraggingMeasurement = true;
+                        drawingPanel.Cursor = Cursors.SizeAll;
+                        drawingPanel.Invalidate();
+                    }
+                }
+            }
+            else if (e.Button == MouseButtons.Middle)
+            {
+                // Start panning with middle mouse button
+                isPanning = true;
+                panStart = e.Location;
+                drawingPanel.Cursor = Cursors.SizeAll;
+            }
+        }
+
+        private void DrawingPanel_MouseMove(object sender, MouseEventArgs e)
+        {
+            if (originalImage == null) return;
+
+            // Handle panning FIRST
+            if (isPanning && (e.Button & MouseButtons.Left) == MouseButtons.Left ||
+                isPanning && (e.Button & MouseButtons.Middle) == MouseButtons.Middle)
+            {
+                int deltaX = e.X - panStart.X;
+                int deltaY = e.Y - panStart.Y;
+
+                panOffset.X += deltaX;
+                panOffset.Y += deltaY;
+
+                panStart = e.Location;
+                UpdateTransformationMatrices();
+                drawingPanel.Invalidate();
+                return;
+            }
+
+            // FIX: Handle grid dragging
+            if (isDraggingGrid)
+            {
+                PointF newGridOrigin = TransformPointToImage(e.Location);
+                gridOrigin = new Point((int)newGridOrigin.X, (int)newGridOrigin.Y);
+                drawingPanel.Invalidate();
+                return;
+            }
+
+            PointF imagePointF = TransformPointToImage(e.Location);
+            Point imagePoint = new Point((int)imagePointF.X, (int)imagePointF.Y);
+
+            if (isDraggingMeasurement && selectedMeasurement.HasValue && selectedMeasurementIndex >= 0)
+            {
+                MoveMeasurement(selectedMeasurementIndex, imagePoint);
+                drawingPanel.Invalidate();
+            }
+            else
+            {
+                // Handle hover effect
+                UpdateHoverInfo(imagePoint);
+
+                // FIX: Update cursor when near grid origin
+                PointF screenGridOrigin = TransformPointToScreen(gridOrigin);
+                if (IsNearPoint(e.Location, new Point((int)screenGridOrigin.X, (int)screenGridOrigin.Y), gridGrabRadius))
+                {
+                    drawingPanel.Cursor = Cursors.SizeAll;
+                }
+                else if (currentTool != ToolMode.None)
+                {
+                    drawingPanel.Cursor = Cursors.Cross;
+                }
+                else if (currentEditMode == EditMode.Move)
+                {
+                    drawingPanel.Cursor = Cursors.Hand;
+                }
+                else
+                {
+                    drawingPanel.Cursor = Cursors.Default;
+                }
+
+                drawingPanel.Invalidate();
+            }
+        }
+
+        private void DrawingPanel_MouseUp(object sender, MouseEventArgs e)
+        {
+            if (isDraggingMeasurement)
+            {
+                isDraggingMeasurement = false;
+                drawingPanel.Cursor = Cursors.Hand;
+                UpdateMeasurementsList();
+            }
+
+            if (isDraggingGrid)
+            {
+                isDraggingGrid = false;
+                drawingPanel.Cursor = Cursors.Default;
+            }
+
+            if (e.Button == MouseButtons.Middle)
+            {
+                isPanning = false;
+                drawingPanel.Cursor = Cursors.Default;
+            }
+        }
+
+        private void DrawingPanel_MouseClick(object sender, MouseEventArgs e)
+        {
+            if (originalImage == null) return;
+
+            PointF imagePointF = TransformPointToImage(e.Location);
+            Point imagePoint = new Point((int)imagePointF.X, (int)imagePointF.Y);
+
+            // FIX: Don't handle measurement creation if we're dragging grid
+            if (isDraggingGrid) return;
+
+            // Handle measurement creation
+            if (currentTool != ToolMode.None && e.Button == MouseButtons.Left)
+            {
+                HandleMeasurementCreation(imagePoint);
+            }
+
+            // Handle selection for moving, deleting, or renaming
+            if (currentEditMode != EditMode.None && currentEditMode != EditMode.Normal && e.Button == MouseButtons.Left)
+            {
+                HandleSelection(imagePoint);
+            }
+        }
+
+    
+
+        private void DrawingPanel_MouseLeave(object sender, EventArgs e)
+        {
+            hoverPoint = null;
+            hoverMeasurement = null;
+            hoverMeasurementName = "";
+            drawingPanel.Invalidate();
+        }
+
+        #endregion
+
+        #region Tool and Edit Mode Management
+
         private void SetToolMode(ToolMode mode)
         {
             currentTool = mode;
@@ -209,8 +1149,9 @@ namespace kinectProject
             currentStartPoint = null;
             angleVertex = null;
             angleFirstPoint = null;
-            selectedLineForPerpendicular = null; // ← Ajouter cette ligne
-            isSelectingBaseLine = false;         // ← Ajouter cette ligne
+            selectedLineForPerpendicular = null;
+            isSelectingBaseLine = false;
+            isPanning = false;
 
             string statusText = "";
             switch (mode)
@@ -221,11 +1162,11 @@ namespace kinectProject
                 case ToolMode.AngleWithAxis: statusText = "Angle with Axis: Draw a line, then select axis"; break;
                 case ToolMode.Distance: statusText = "Distance Tool: Click to measure distance"; break;
                 case ToolMode.Reference: statusText = "Reference Tool: Draw a line of known length"; break;
-                case ToolMode.Perpendicular: statusText = "Perpendicular Tool: Select a line first, then click to place perpendicular line";  break;
+                case ToolMode.Perpendicular: statusText = "Perpendicular Tool: Select a line first, then click to place perpendicular line"; break;
             }
 
             UpdateStatus(statusText);
-            pictureBox.Cursor = Cursors.Cross;
+            drawingPanel.Cursor = Cursors.Cross;
             DeselectAllMeasurements();
         }
 
@@ -236,28 +1177,28 @@ namespace kinectProject
             currentStartPoint = null;
             angleVertex = null;
             angleFirstPoint = null;
-
-            selectedLineForPerpendicular = null; // ← Ajouter cette ligne
-            isSelectingBaseLine = false;         // ← Ajouter cette ligne
+            selectedLineForPerpendicular = null;
+            isSelectingBaseLine = false;
+            isPanning = false;
 
             string statusText = "";
             switch (mode)
             {
                 case EditMode.Normal:
                     statusText = "Normal Mode: Hover over measurements to see details";
-                    pictureBox.Cursor = Cursors.Default;
+                    drawingPanel.Cursor = Cursors.Default;
                     break;
                 case EditMode.Delete:
                     statusText = "Delete Mode: Click on measurement to delete";
-                    pictureBox.Cursor = Cursors.No;
+                    drawingPanel.Cursor = Cursors.No;
                     break;
                 case EditMode.Move:
                     statusText = "Move Mode: Click and drag to move measurement";
-                    pictureBox.Cursor = Cursors.Hand;
+                    drawingPanel.Cursor = Cursors.Hand;
                     break;
                 case EditMode.Rename:
                     statusText = "Rename Mode: Click on measurement to rename";
-                    pictureBox.Cursor = Cursors.UpArrow;
+                    drawingPanel.Cursor = Cursors.UpArrow;
                     break;
             }
 
@@ -270,112 +1211,13 @@ namespace kinectProject
             if (statusStrip.Items.Count == 0)
                 statusStrip.Items.Add(new ToolStripStatusLabel());
 
-            statusStrip.Items[0].Text = message;
+            string zoomInfo = $" | Zoom: {zoomFactor * 100:F0}%";
+            statusStrip.Items[0].Text = message + zoomInfo;
         }
 
-        private void BtnImport_Click(object sender, EventArgs e)
-        {
-            using (OpenFileDialog openFileDialog = new OpenFileDialog())
-            {
-                openFileDialog.Filter = "Image Files|*.jpg;*.jpeg;*.png;*.bmp|All Files|*.*";
-                if (openFileDialog.ShowDialog() == DialogResult.OK)
-                {
-                    try
-                    {
-                        originalImage = System.Drawing.Image.FromFile(openFileDialog.FileName);
-                        pictureBox.Image = (System.Drawing.Image)originalImage.Clone();
+        #endregion
 
-                        // Initialize grid at center
-                        gridOrigin = new Point(pictureBox.Width / 2, pictureBox.Height / 2);
-
-                        measurements.Clear();
-                        measurementsList.Items.Clear();
-                        measurementCounter = 1;
-                        idCounter = 1;
-                        isReferenceSet = false;
-                        pixelToRealRatio = 1.0f;
-                        isSettingReference = false;
-
-                        UpdateStatus("Image loaded. Select a measurement tool.");
-                        pictureBox.Invalidate();
-                    }
-                    catch (Exception ex)
-                    {
-                        MessageBox.Show($"Error loading image: {ex.Message}", "Error",
-                            MessageBoxButtons.OK, MessageBoxIcon.Error);
-                    }
-                }
-            }
-        }
-
-        private void BtnClear_Click(object sender, EventArgs e)
-        {
-            measurements.Clear();
-            measurementsList.Items.Clear();
-            measurementCounter = 1;
-            idCounter = 1;
-            currentStartPoint = null;
-            angleVertex = null;
-            angleFirstPoint = null;
-            isReferenceSet = false;
-            pixelToRealRatio = 1.0f;
-            isSettingReference = false;
-            UpdateStatus("All measurements cleared.");
-            pictureBox.Invalidate();
-        }
-
-        private void BtnToggleGrid_Click(object sender, EventArgs e)
-        {
-            showGrid = !showGrid;
-            pictureBox.Invalidate();
-        }
-
-        private void MeasurementsList_SelectedIndexChanged(object sender, EventArgs e)
-        {
-            DeselectAllMeasurements();
-
-            if (measurementsList.SelectedItems.Count > 0)
-            {
-                int selectedId = int.Parse(measurementsList.SelectedItems[0].Text);
-                int index = measurements.FindIndex(m => m.ID == selectedId);
-
-                if (index >= 0)
-                {
-                    Measurement m = measurements[index];
-                    m.IsSelected = true;
-                    measurements[index] = m;
-                    selectedMeasurementIndex = index;
-                    selectedMeasurement = m;
-                }
-            }
-
-            pictureBox.Invalidate();
-        }
-
-        private void PictureBox_MouseClick(object sender, MouseEventArgs e)
-        {
-            if (pictureBox.Image == null) return;
-
-            // Handle grid dragging
-            if (e.Button == MouseButtons.Left && IsNearPoint(e.Location, gridOrigin, gridGrabRadius))
-            {
-                gridOrigin = e.Location;
-                pictureBox.Invalidate();
-                return;
-            }
-
-            // Handle measurement creation
-            if (currentTool != ToolMode.None && e.Button == MouseButtons.Left)
-            {
-                HandleMeasurementCreation(e.Location);
-            }
-
-            // Handle selection for moving, deleting, or renaming
-            if (currentEditMode != EditMode.None && currentEditMode != EditMode.Normal && e.Button == MouseButtons.Left)
-            {
-                HandleSelection(e.Location);
-            }
-        }
+        #region Measurement Creation and Handling
 
         private void HandleMeasurementCreation(Point location)
         {
@@ -397,7 +1239,7 @@ namespace kinectProject
                             idCounter++));
                         currentStartPoint = null;
                         UpdateMeasurementsList();
-                        pictureBox.Invalidate();
+                        drawingPanel.Invalidate();
                     }
                     break;
 
@@ -409,7 +1251,7 @@ namespace kinectProject
                         MeasurementType.Point,
                         idCounter++));
                     UpdateMeasurementsList();
-                    pictureBox.Invalidate();
+                    drawingPanel.Invalidate();
                     break;
 
                 case ToolMode.Angle:
@@ -425,7 +1267,6 @@ namespace kinectProject
                     }
                     else
                     {
-                        // Create angle measurement with two segments
                         int angleId = idCounter++;
                         Measurement firstSegment = new Measurement(
                             angleVertex.Value,
@@ -446,11 +1287,10 @@ namespace kinectProject
                         measurements.Add(secondSegment);
 
                         measurementCounter++;
-
                         angleVertex = null;
                         angleFirstPoint = null;
                         UpdateMeasurementsList();
-                        pictureBox.Invalidate();
+                        drawingPanel.Invalidate();
                     }
                     break;
 
@@ -476,13 +1316,13 @@ namespace kinectProject
                         {
                             // Update measurement with axis info
                             Measurement m = measurements[measurements.Count - 1];
-                            m.Axis = axisDialog.SelectedAxis;
+                            m.Axis = (AxisType?)axisDialog.SelectedAxis;
                             measurements[measurements.Count - 1] = m;
                         }
 
                         currentStartPoint = null;
                         UpdateMeasurementsList();
-                        pictureBox.Invalidate();
+                        drawingPanel.Invalidate();
                     }
                     break;
 
@@ -502,7 +1342,7 @@ namespace kinectProject
                             idCounter++));
                         currentStartPoint = null;
                         UpdateMeasurementsList();
-                        pictureBox.Invalidate();
+                        drawingPanel.Invalidate();
                     }
                     break;
 
@@ -523,10 +1363,10 @@ namespace kinectProject
                         currentStartPoint = null;
                         isSettingReference = true;
                         UpdateMeasurementsList();
-                        pictureBox.Invalidate();
+                        drawingPanel.Invalidate();
 
                         // Prompt for reference value
-                        using (var inputDialog = new ReferenceInputDialog())
+                        using (var inputDialog = new ReferenceInputDialogD())
                         {
                             if (inputDialog.ShowDialog() == DialogResult.OK)
                             {
@@ -540,13 +1380,16 @@ namespace kinectProject
                         isSettingReference = false;
                     }
                     break;
+
                 case ToolMode.Perpendicular:
                     if (!isSelectingBaseLine)
                     {
                         // First click: select the base line
                         int lineIndex = FindMeasurementAtPoint(location);
                         if (lineIndex >= 0 && (measurements[lineIndex].Type == MeasurementType.Line ||
-                                              measurements[lineIndex].Type == MeasurementType.Distance))
+                                              measurements[lineIndex].Type == MeasurementType.Distance ||
+                                              measurements[lineIndex].Type == MeasurementType.ReferenceLine ||
+                                              measurements[lineIndex].Type == MeasurementType.Angle)) // ADD THIS LINE
                         {
                             selectedLineForPerpendicular = measurements[lineIndex];
                             isSelectingBaseLine = true;
@@ -557,11 +1400,11 @@ namespace kinectProject
                             Measurement m = measurements[lineIndex];
                             m.IsSelected = true;
                             measurements[lineIndex] = m;
-                            pictureBox.Invalidate();
+                            drawingPanel.Invalidate();
                         }
                         else
                         {
-                            UpdateStatus("Please select a valid line first");
+                            UpdateStatus("Please select a valid line first (Line, Distance, Reference, or Angle)");
                         }
                     }
                     else
@@ -574,14 +1417,137 @@ namespace kinectProject
                             selectedLineForPerpendicular = null;
                             DeselectAllMeasurements();
                             UpdateMeasurementsList();
-                            pictureBox.Invalidate();
+                            drawingPanel.Invalidate();
                         }
                     }
                     break;
 
-
             }
         }
+
+        private void CreatePerpendicularLine(Measurement baseLine, Point endPoint)
+        {
+            Point A, B;
+
+            // Handle different line types
+            if (baseLine.Type == MeasurementType.Angle && baseLine.Vertex.HasValue)
+            {
+                // For angle segments, use the vertex and endpoint as the line
+                A = baseLine.Vertex.Value;
+                B = baseLine.End;
+            }
+            else
+            {
+                // For regular lines, use start and end points
+                A = baseLine.Start;
+                B = baseLine.End;
+            }
+
+            Point C = endPoint;
+
+            // Calculate the perpendicular projection of point C onto line AB
+            double dx = B.X - A.X;
+            double dy = B.Y - A.Y;
+            double lengthSquared = dx * dx + dy * dy;
+
+            if (Math.Abs(lengthSquared) < 0.0001) return; // Avoid division by zero
+
+            // Calculate projection parameter t
+            double t = ((C.X - A.X) * dx + (C.Y - A.Y) * dy) / lengthSquared;
+
+            // For angle segments, don't clamp t to [0,1] to allow perpendiculars beyond the segment
+            if (baseLine.Type == MeasurementType.Angle)
+            {
+                // Allow perpendiculars to extend beyond the angle segment
+                // t can be any value, but we'll limit it to reasonable bounds to prevent extreme lines
+                t = Math.Max(-2, Math.Min(3, t)); // Allow some extension beyond the segment
+            }
+            else
+            {
+                // For regular lines, clamp to the segment
+                t = Math.Max(0, Math.Min(1, t));
+            }
+
+            // Calculate the perpendicular foot point
+            Point perpendicularFoot = new Point(
+                (int)(A.X + t * dx),
+                (int)(A.Y + t * dy)
+            );
+
+            // Only create the perpendicular line if the foot point is different from the endpoint
+            if (CalculateDistance(perpendicularFoot, C) > 5) // Minimum distance threshold
+            {
+                Measurement perpendicularLine = new Measurement(
+                    perpendicularFoot,
+                    C,
+                    $"P{measurementCounter++}",
+                    MeasurementType.PerpendicularLine,
+                    idCounter++
+                );
+
+                measurements.Add(perpendicularLine);
+                UpdateStatus($"Perpendicular line created (ID: {perpendicularLine.ID})");
+            }
+            else
+            {
+                UpdateStatus("Perpendicular line too short - not created");
+            }
+        }
+        private void HandleSelection(Point location)
+        {
+            int index = FindMeasurementAtPoint(location);
+
+            if (index >= 0)
+            {
+                if (currentEditMode == EditMode.Delete)
+                {
+                    measurements.RemoveAt(index);
+                    UpdateMeasurementsList();
+                    drawingPanel.Invalidate();
+                    UpdateStatus("Measurement deleted");
+                }
+                else if (currentEditMode == EditMode.Rename)
+                {
+                    RenameMeasurement(index);
+                }
+                // Move logic is now handled in MouseDown event
+            }
+            else
+            {
+                // Clicked on empty space - deselect all
+                DeselectAllMeasurements();
+                drawingPanel.Invalidate();
+            }
+        }
+
+
+        private Point CalculatePerpendicularFoot(Measurement baseLine, Point point)
+        {
+            Point A = baseLine.Start;
+            Point B = baseLine.End;
+
+            double dx = B.X - A.X;
+            double dy = B.Y - A.Y;
+            double lengthSquared = dx * dx + dy * dy;
+
+            if (lengthSquared == 0) return A;
+
+            double t = ((point.X - A.X) * dx + (point.Y - A.Y) * dy) / lengthSquared;
+
+            // Don't clamp t for angle segments to allow perpendiculars beyond the segment
+            if (baseLine.Type != MeasurementType.Angle)
+            {
+                t = Math.Max(0, Math.Min(1, t));
+            }
+
+            return new Point(
+                (int)(A.X + t * dx),
+                (int)(A.Y + t * dy)
+            );
+        }
+        #endregion
+
+        #region Measurement Calculations and Utilities
 
         private void SetScaleFromReference(Measurement reference, float referenceLength)
         {
@@ -605,33 +1571,6 @@ namespace kinectProject
             }
         }
 
-        private void HandleSelection(Point location)
-        {
-            int index = FindMeasurementAtPoint(location);
-
-            if (index >= 0)
-            {
-                if (currentEditMode == EditMode.Delete)
-                {
-                    measurements.RemoveAt(index);
-                    UpdateMeasurementsList();
-                    pictureBox.Invalidate();
-                    UpdateStatus("Measurement deleted");
-                }
-                else if (currentEditMode == EditMode.Rename)
-                {
-                    RenameMeasurement(index);
-                }
-                // Move logic is now handled in MouseDown event
-            }
-            else
-            {
-                // Clicked on empty space - deselect all
-                DeselectAllMeasurements();
-                pictureBox.Invalidate();
-            }
-        }
-
         private void RenameMeasurement(int index)
         {
             Measurement m = measurements[index];
@@ -643,201 +1582,9 @@ namespace kinectProject
                     m.Name = renameDialog.NewName;
                     measurements[index] = m;
                     UpdateMeasurementsList();
-                    pictureBox.Invalidate();
+                    drawingPanel.Invalidate();
                     UpdateStatus($"Measurement renamed to {m.Name}");
                 }
-            }
-        }
-
-        private void PictureBox_MouseDown(object sender, MouseEventArgs e)
-        {
-            if (e.Button == MouseButtons.Left)
-            {
-                // Handle grid dragging
-                if (IsNearPoint(e.Location, gridOrigin, gridGrabRadius))
-                {
-                    isDraggingGrid = true;
-                    return;
-                }
-
-                // Handle measurement selection for moving
-                if (currentEditMode == EditMode.Move)
-                {
-                    int index = FindMeasurementAtPoint(e.Location);
-
-                    if (index >= 0)
-                    {
-                        // Deselect all measurements first
-                        DeselectAllMeasurements();
-
-                        // Select the clicked measurement
-                        Measurement m = measurements[index];
-                        m.IsSelected = true;
-                        measurements[index] = m;
-
-                        selectedMeasurementIndex = index;
-                        selectedMeasurement = m;
-
-                        // Calculate offset based on where the user clicked on the measurement
-                        if (m.Type == MeasurementType.Point)
-                        {
-                            dragOffset = new Point(
-                                e.Location.X - m.Start.X,
-                                e.Location.Y - m.Start.Y);
-                        }
-                        else
-                        {
-                            // For lines, find the closest point to where user clicked
-                            double distanceToStart = CalculateDistance(e.Location, m.Start);
-                            double distanceToEnd = CalculateDistance(e.Location, m.End);
-
-                            if (distanceToStart < distanceToEnd)
-                            {
-                                // User clicked near the start point
-                                dragOffset = new Point(
-                                    e.Location.X - m.Start.X,
-                                    e.Location.Y - m.Start.Y);
-                            }
-                            else
-                            {
-                                // User clicked near the end point
-                                dragOffset = new Point(
-                                    e.Location.X - m.End.X,
-                                    e.Location.Y - m.End.Y);
-                            }
-                        }
-
-                        isDraggingMeasurement = true;
-                        pictureBox.Cursor = Cursors.SizeAll;
-                        pictureBox.Invalidate(); // Refresh to show selection
-                    }
-                    else
-                    {
-                        // Clicked on empty space - deselect all
-                        DeselectAllMeasurements();
-                        pictureBox.Invalidate();
-                    }
-                }
-            }
-        }
-
-        private void PictureBox_MouseMove(object sender, MouseEventArgs e)
-        {
-            if (isDraggingGrid)
-            {
-                gridOrigin = e.Location;
-                pictureBox.Invalidate();
-            }
-
-            if (isDraggingMeasurement && selectedMeasurement.HasValue && selectedMeasurementIndex >= 0)
-            {
-                MoveMeasurement(selectedMeasurementIndex, e.Location);
-                pictureBox.Invalidate();
-            }
-            else if (currentTool != ToolMode.None)
-            {
-                // Refresh to show real-time drawing preview
-                pictureBox.Invalidate();
-            }
-            else
-            {
-                // Handle hover effect for all measurements in Normal mode
-                Point? previousHoverPoint = hoverPoint;
-                string previousHoverName = hoverMeasurementName;
-                Measurement? previousHoverMeasurement = hoverMeasurement;
-
-                int index = FindMeasurementAtPoint(e.Location);
-                if (index >= 0)
-                {
-                    hoverMeasurement = measurements[index];
-                    hoverPoint = GetHoverPointForMeasurement(hoverMeasurement.Value, e.Location);
-                    hoverMeasurementName = GetHoverTextForMeasurement(hoverMeasurement.Value);
-                }
-                else
-                {
-                    hoverPoint = null;
-                    hoverMeasurementName = "";
-                    hoverMeasurement = null;
-                }
-
-                // Only invalidate if hover state changed - FIXED COMPARISON
-                bool hoverPointChanged = hoverPoint != previousHoverPoint;
-                bool hoverNameChanged = hoverMeasurementName != previousHoverName;
-                bool hoverMeasurementChanged = !Nullable.Equals(hoverMeasurement, previousHoverMeasurement);
-
-                if (hoverPointChanged || hoverNameChanged || hoverMeasurementChanged)
-                {
-                    pictureBox.Invalidate();
-                }
-            }
-        }
-
-        private Point GetHoverPointForMeasurement(Measurement m, Point mouseLocation)
-        {
-            switch (m.Type)
-            {
-                case MeasurementType.Point:
-                    return m.Start;
-                case MeasurementType.Line:
-                case MeasurementType.Distance:
-                case MeasurementType.ReferenceLine:
-                case MeasurementType.AngleWithAxis:
-                    // Return midpoint for lines
-                    return new Point((m.Start.X + m.End.X) / 2, (m.Start.Y + m.End.Y) / 2);
-                case MeasurementType.Angle:
-                    if (m.Vertex.HasValue)
-                        return m.Vertex.Value;
-                    else
-                        return new Point((m.Start.X + m.End.X) / 2, (m.Start.Y + m.End.Y) / 2);
-                default:
-                    return mouseLocation;
-            }
-        }
-
-        private string GetHoverTextForMeasurement(Measurement m)
-        {
-            switch (m.Type)
-            {
-                case MeasurementType.Point:
-                    return $"{m.Name} (ID: {m.ID}) - ({m.Start.X}, {m.Start.Y})";
-                case MeasurementType.Line:
-                    double lineLength = CalculateDistance(m.Start, m.End);
-                    return $"{m.Name} (ID: {m.ID}): {lineLength:F1} px";
-                case MeasurementType.Distance:
-                    double pixels = CalculateDistance(m.Start, m.End);
-                    if (isReferenceSet)
-                    {
-                        double realUnits = pixels / pixelToRealRatio;
-                        return $"{m.Name} (ID: {m.ID}): {pixels:F1} px ({realUnits:F2} cm)";
-                    }
-                    return $"{m.Name} (ID: {m.ID}): {pixels:F1} px";
-                case MeasurementType.ReferenceLine:
-                    double refPixels = CalculateDistance(m.Start, m.End);
-                    double refUnits = refPixels / pixelToRealRatio;
-                    return $"{m.Name} (ID: {m.ID}): {refPixels:F1} px ({refUnits:F2} cm) [Reference]";
-                case MeasurementType.Angle:
-                    double angle = CalculateAngle(m);
-                    return $"{m.Name} (ID: {m.ID}): {angle:F1}°";
-                case MeasurementType.AngleWithAxis:
-                    double axisAngle = CalculateAngleWithAxis(m);
-                    return $"{m.Name} (ID: {m.ID}): {axisAngle:F1}° to {m.Axis}-axis";
-                default:
-                    return $"{m.Name} (ID: {m.ID})";
-            }
-        }
-
-        private void PictureBox_MouseUp(object sender, MouseEventArgs e)
-        {
-            if (isDraggingGrid)
-            {
-                isDraggingGrid = false;
-            }
-
-            if (isDraggingMeasurement)
-            {
-                isDraggingMeasurement = false;
-                pictureBox.Cursor = Cursors.Hand;
-                UpdateMeasurementsList(); // Update the list to reflect new positions
             }
         }
 
@@ -949,7 +1696,7 @@ namespace kinectProject
                 case MeasurementType.Distance:
                 case MeasurementType.ReferenceLine:
                 case MeasurementType.AngleWithAxis:
-                case MeasurementType.PerpendicularLine: // ← Ajouter cette ligne
+                case MeasurementType.PerpendicularLine:
                     return IsPointNearLine(point, m.Start, m.End, tolerance);
 
                 case MeasurementType.Angle:
@@ -965,13 +1712,18 @@ namespace kinectProject
             }
         }
 
-        private List<Measurement> FindAngleSegments(Point vertex, int id)
+        private int FindAngleMeasurementAtPoint(Point point)
         {
-            return measurements.Where(m =>
-                m.Type == MeasurementType.Angle &&
-                m.Vertex.HasValue &&
-                m.Vertex.Value == vertex &&
-                m.ID == id).ToList();
+            for (int i = 0; i < measurements.Count; i++)
+            {
+                if (measurements[i].Type == MeasurementType.Angle &&
+                    measurements[i].Vertex.HasValue &&
+                    IsPointNearLine(point, measurements[i].Vertex.Value, measurements[i].End, 8))
+                {
+                    return i;
+                }
+            }
+            return -1;
         }
 
         private bool IsNearPoint(Point p1, Point p2, int tolerance)
@@ -1011,11 +1763,239 @@ namespace kinectProject
             measurementsList.SelectedItems.Clear();
         }
 
+        private double CalculateDistance(Point p1, Point p2)
+        {
+            return Math.Sqrt(Math.Pow(p2.X - p1.X, 2) + Math.Pow(p2.Y - p1.Y, 2));
+        }
+
+        private void UpdateHoverInfo(Point imagePoint)
+        {
+            int index = FindMeasurementAtPoint(imagePoint);
+            if (index >= 0)
+            {
+                hoverMeasurement = measurements[index];
+                hoverPoint = GetHoverPointForMeasurement(hoverMeasurement.Value, imagePoint);
+                hoverMeasurementName = GetHoverTextForMeasurement(hoverMeasurement.Value);
+            }
+            else
+            {
+                hoverPoint = null;
+                hoverMeasurementName = "";
+                hoverMeasurement = null;
+            }
+        }
+
+        private Point GetHoverPointForMeasurement(Measurement m, Point mouseLocation)
+        {
+            switch (m.Type)
+            {
+                case MeasurementType.Point:
+                    return m.Start;
+                case MeasurementType.Line:
+                case MeasurementType.Distance:
+                case MeasurementType.ReferenceLine:
+                case MeasurementType.AngleWithAxis:
+                    // Return midpoint for lines
+                    return new Point((m.Start.X + m.End.X) / 2, (m.Start.Y + m.End.Y) / 2);
+                case MeasurementType.Angle:
+                    if (m.Vertex.HasValue)
+                        return m.Vertex.Value;
+                    else
+                        return new Point((m.Start.X + m.End.X) / 2, (m.Start.Y + m.End.Y) / 2);
+                case MeasurementType.PerpendicularLine:
+                    return new Point((m.Start.X + m.End.X) / 2, (m.Start.Y + m.End.Y) / 2);
+                default:
+                    return mouseLocation;
+            }
+        }
+
+        private string GetHoverTextForMeasurement(Measurement m)
+        {
+            switch (m.Type)
+            {
+                case MeasurementType.Point:
+                    return $"{m.Name} (ID: {m.ID}) - ({m.Start.X}, {m.Start.Y})";
+                case MeasurementType.Line:
+                    double lineLength = CalculateDistance(m.Start, m.End);
+                    return $"{m.Name} (ID: {m.ID}): {lineLength:F1} px";
+                case MeasurementType.Distance:
+                    double pixels = CalculateDistance(m.Start, m.End);
+                    if (isReferenceSet)
+                    {
+                        double realUnits = pixels / pixelToRealRatio;
+                        return $"{m.Name} (ID: {m.ID}): {pixels:F1} px ({realUnits:F2} cm)";
+                    }
+                    return $"{m.Name} (ID: {m.ID}): {pixels:F1} px";
+                case MeasurementType.ReferenceLine:
+                    double refPixels = CalculateDistance(m.Start, m.End);
+                    double refUnits = refPixels / pixelToRealRatio;
+                    return $"{m.Name} (ID: {m.ID}): {refPixels:F1} px ({refUnits:F2} cm) [Reference]";
+                case MeasurementType.Angle:
+                    double angle = CalculateAngle(m);
+                    return $"{m.Name} (ID: {m.ID}): {angle:F1}°";
+                case MeasurementType.AngleWithAxis:
+                    double axisAngle = CalculateAngleWithAxis(m);
+                    return $"{m.Name} (ID: {m.ID}): {axisAngle:F1}° to {m.Axis}-axis";
+                case MeasurementType.PerpendicularLine:
+                    double perpLength = CalculateDistance(m.Start, m.End);
+                    if (isReferenceSet)
+                    {
+                        double realUnits = perpLength / pixelToRealRatio;
+                        return $"{m.Name} (ID: {m.ID}): {perpLength:F1} px ({realUnits:F2} cm)";
+                    }
+                    return $"{m.Name} (ID: {m.ID}): {perpLength:F1} px";
+                default:
+                    return $"{m.Name} (ID: {m.ID})";
+            }
+        }
+
+        private double CalculateAngle(Measurement m1, Measurement m2)
+        {
+            if (m1.Type != MeasurementType.Angle || !m1.Vertex.HasValue ||
+                m2.Type != MeasurementType.Angle || !m2.Vertex.HasValue) return 0;
+
+            // Calculate vectors from vertex to endpoints
+            Point v1 = new Point(m1.End.X - m1.Vertex.Value.X, m1.End.Y - m1.Vertex.Value.Y);
+            Point v2 = new Point(m2.End.X - m2.Vertex.Value.X, m2.End.Y - m2.Vertex.Value.Y);
+
+            double dotProduct = v1.X * v2.X + v1.Y * v2.Y;
+            double mag1 = Math.Sqrt(v1.X * v1.X + v1.Y * v1.Y);
+            double mag2 = Math.Sqrt(v2.X * v2.X + v2.Y * v2.Y);
+
+            if (mag1 == 0 || mag2 == 0) return 0;
+
+            double cosTheta = Math.Max(-1, Math.Min(1, dotProduct / (mag1 * mag2)));
+
+            // This always returns the smaller angle between the vectors (0-180 degrees)
+            return Math.Acos(cosTheta) * (180 / Math.PI);
+        }
+
+        // Method to calculate angle for a single measurement (find its pair)
+        private double CalculateAngle(Measurement m)
+        {
+            if (m.Type != MeasurementType.Angle || !m.Vertex.HasValue) return 0;
+
+            // Find the other segment that shares the same vertex and ID
+            Measurement otherSegment = measurements.FirstOrDefault(meas =>
+                meas.Type == MeasurementType.Angle &&
+                meas.Vertex.HasValue &&
+                meas.Vertex.Value == m.Vertex.Value &&
+                meas.ID == m.ID &&
+                meas.End != m.End);
+
+            if (otherSegment.Type == MeasurementType.Angle)
+            {
+                return CalculateAngle(m, otherSegment);
+            }
+
+            return 0;
+        }
+
+        private double CalculateAngleWithAxis(Measurement m)
+        {
+            if (m.Type != MeasurementType.AngleWithAxis || !m.Axis.HasValue) return 0;
+
+            // Calculate angle relative to specified axis
+            double dx = m.End.X - m.Start.X;
+            double dy = m.End.Y - m.Start.Y;
+
+            if (m.Axis == AxisType.X)
+                return Math.Abs(Math.Atan2(dy, dx) * (180 / Math.PI));
+            else
+                return Math.Abs(Math.Atan2(dx, dy) * (180 / Math.PI));
+        }
+
+        #endregion
+
+        #region Image and Measurement Management
+
+        private void BtnImport_Click(object sender, EventArgs e)
+        {
+            using (OpenFileDialog openFileDialog = new OpenFileDialog())
+            {
+                openFileDialog.Filter = "Image Files|*.jpg;*.jpeg;*.png;*.bmp|All Files|*.*";
+                if (openFileDialog.ShowDialog() == DialogResult.OK)
+                {
+                    try
+                    {
+                        originalImage = System.Drawing.Image.FromFile(openFileDialog.FileName);
+                        zoomFactor = 1.0f;
+                        panOffset = PointF.Empty;
+                        UpdateTransformationMatrices();
+
+                        measurements.Clear();
+                        measurementsList.Items.Clear();
+                        measurementCounter = 1;
+                        idCounter = 1;
+                        isReferenceSet = false;
+                        pixelToRealRatio = 1.0f;
+                        isSettingReference = false;
+
+                        UpdateStatus("Image loaded. Select a measurement tool.");
+                        drawingPanel.Invalidate();
+                    }
+                    catch (Exception ex)
+                    {
+                        MessageBox.Show($"Error loading image: {ex.Message}", "Error",
+                            MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    }
+                }
+            }
+        }
+
+        private void BtnClear_Click(object sender, EventArgs e)
+        {
+            measurements.Clear();
+            measurementsList.Items.Clear();
+            measurementCounter = 1;
+            idCounter = 1;
+            currentStartPoint = null;
+            angleVertex = null;
+            angleFirstPoint = null;
+            isReferenceSet = false;
+            pixelToRealRatio = 1.0f;
+            isSettingReference = false;
+            UpdateStatus("All measurements cleared.");
+            drawingPanel.Invalidate();
+        }
+
+        private void BtnToggleGrid_Click(object sender, EventArgs e)
+        {
+            showGrid = !showGrid;
+            drawingPanel.Invalidate();
+        }
+
+        #endregion
+
+        #region ListView Management
+
+        private void MeasurementsList_SelectedIndexChanged(object sender, EventArgs e)
+        {
+            DeselectAllMeasurements();
+
+            if (measurementsList.SelectedItems.Count > 0)
+            {
+                int selectedId = int.Parse(measurementsList.SelectedItems[0].Text);
+                int index = measurements.FindIndex(m => m.ID == selectedId);
+
+                if (index >= 0)
+                {
+                    Measurement m = measurements[index];
+                    m.IsSelected = true;
+                    measurements[index] = m;
+                    selectedMeasurementIndex = index;
+                    selectedMeasurement = m;
+                }
+            }
+
+            drawingPanel.Invalidate();
+        }
+
         private void UpdateMeasurementsList()
         {
             measurementsList.Items.Clear();
 
-            // Group angle measurements by ID to avoid duplicates
+            // Group measurements by ID to avoid duplicates
             var groupedMeasurements = measurements
                 .GroupBy(m => m.ID)
                 .Select(g => g.First())
@@ -1093,7 +2073,8 @@ namespace kinectProject
 
                 case MeasurementType.Point:
                     return $"({m.Start.X}, {m.Start.Y})";
-                case MeasurementType.PerpendicularLine: // ← Ajouter ce cas
+
+                case MeasurementType.PerpendicularLine:
                     double perpLength = CalculateDistance(m.Start, m.End);
                     if (isReferenceSet)
                     {
@@ -1102,636 +2083,18 @@ namespace kinectProject
                     }
                     return $"{perpLength:F1} px";
 
-
                 default:
                     return "-";
             }
         }
 
-        private double CalculateDistance(Point p1, Point p2)
-        {
-            return Math.Sqrt(Math.Pow(p2.X - p1.X, 2) + Math.Pow(p2.Y - p1.Y, 2));
-        }
+        #endregion
 
-        private double CalculateAngle(Measurement m1, Measurement m2)
-        {
-            if (m1.Type != MeasurementType.Angle || !m1.Vertex.HasValue ||
-                m2.Type != MeasurementType.Angle || !m2.Vertex.HasValue) return 0;
-
-            // Calculate vectors from vertex to endpoints
-            Point v1 = new Point(m1.End.X - m1.Vertex.Value.X, m1.End.Y - m1.Vertex.Value.Y);
-            Point v2 = new Point(m2.End.X - m2.Vertex.Value.X, m2.End.Y - m2.Vertex.Value.Y);
-
-            double dotProduct = v1.X * v2.X + v1.Y * v2.Y;
-            double mag1 = Math.Sqrt(v1.X * v1.X + v1.Y * v1.Y);
-            double mag2 = Math.Sqrt(v2.X * v2.X + v2.Y * v2.Y);
-
-            if (mag1 == 0 || mag2 == 0) return 0;
-
-            double cosTheta = Math.Max(-1, Math.Min(1, dotProduct / (mag1 * mag2)));
-
-            // This always returns the smaller angle between the vectors (0-180 degrees)
-            return Math.Acos(cosTheta) * (180 / Math.PI);
-        }
-
-        // Method to calculate angle for a single measurement (find its pair)
-        private double CalculateAngle(Measurement m)
-        {
-            if (m.Type != MeasurementType.Angle || !m.Vertex.HasValue) return 0;
-
-            // Find the other segment that shares the same vertex and ID
-            Measurement otherSegment = measurements.FirstOrDefault(meas =>
-                meas.Type == MeasurementType.Angle &&
-                meas.Vertex.HasValue &&
-                meas.Vertex.Value == m.Vertex.Value &&
-                meas.ID == m.ID &&
-                meas.End != m.End);
-
-            if (otherSegment.Type == MeasurementType.Angle)
-            {
-                return CalculateAngle(m, otherSegment);
-            }
-
-            return 0;
-        }
-
-        private double CalculateAngleWithAxis(Measurement m)
-        {
-            if (m.Type != MeasurementType.AngleWithAxis || !m.Axis.HasValue) return 0;
-
-            // Calculate angle relative to specified axis
-            double dx = m.End.X - m.Start.X;
-            double dy = m.End.Y - m.Start.Y;
-
-            if (m.Axis == AxisType.X)
-                return Math.Abs(Math.Atan2(dy, dx) * (180 / Math.PI));
-            else
-                return Math.Abs(Math.Atan2(dx, dy) * (180 / Math.PI));
-        }
-
-        private void PictureBox_Paint(object sender, PaintEventArgs e)
-        {
-            if (pictureBox.Image == null) return;
-
-            Graphics g = e.Graphics;
-            g.SmoothingMode = SmoothingMode.AntiAlias;
-
-            // Draw grid if enabled
-            if (showGrid)
-            {
-                DrawGrid(g);
-            }
-
-            // Draw measurements
-            foreach (var m in measurements)
-            {
-                DrawMeasurement(g, m);
-            }
-
-            // Draw hover label for all measurements in Normal mode
-            if (currentEditMode == EditMode.Normal && hoverPoint.HasValue && !string.IsNullOrEmpty(hoverMeasurementName))
-            {
-                DrawHoverLabel(g, hoverPoint.Value, hoverMeasurementName);
-            }
-
-            // Draw current measurement in progress
-            if (currentTool != ToolMode.None)
-            {
-                Point currentPos = pictureBox.PointToClient(Cursor.Position);
-
-                using (Pen tempPen = new Pen(Color.Yellow, 2) { DashStyle = DashStyle.Dash })
-                {
-                    if (currentTool == ToolMode.Angle)
-                    {
-                        if (angleVertex.HasValue && angleFirstPoint.HasValue)
-                        {
-                            // Draw both segments for angle in progress
-                            g.DrawLine(tempPen, angleVertex.Value, angleFirstPoint.Value);
-                            g.DrawLine(tempPen, angleVertex.Value, currentPos);
-
-                            // Draw angle arc preview
-                            DrawAngleArcPreview(g, angleVertex.Value, angleFirstPoint.Value, currentPos);
-                        }
-                        else if (angleVertex.HasValue)
-                        {
-                            // Draw first segment
-                            g.DrawLine(tempPen, angleVertex.Value, currentPos);
-                        }
-                    }
-                    else if (currentTool == ToolMode.AngleWithAxis)
-                    {
-                        if (currentStartPoint.HasValue)
-                        {
-                            g.DrawLine(tempPen, currentStartPoint.Value, currentPos);
-                        }
-                    }
-                    else if (currentStartPoint.HasValue)
-                    {
-                        g.DrawLine(tempPen, currentStartPoint.Value, currentPos);
-
-                        // Draw helper for 90° angles
-                        if (currentTool == ToolMode.Line || currentTool == ToolMode.Distance)
-                        {
-                            DrawAngleHelpers(g, currentStartPoint.Value, currentPos);
-                        }
-                    }
-                    else if (currentTool == ToolMode.Perpendicular && isSelectingBaseLine && selectedLineForPerpendicular.HasValue)
-                    {
-                        Point currentPosi = pictureBox.PointToClient(Cursor.Position);
-
-                        // Draw preview of the perpendicular line
-                        if (selectedLineForPerpendicular.HasValue)
-                        {
-                            Point foot = CalculatePerpendicularFoot(selectedLineForPerpendicular.Value, currentPosi);
-
-                            using (Pen previewPen = new Pen(Color.Cyan, 2) { DashStyle = DashStyle.Dash })
-                            {
-                                g.DrawLine(previewPen, foot, currentPosi);
-                            }
-
-                            // Draw perpendicular symbol (small square at the intersection)
-                            using (Brush symbolBrush = new SolidBrush(Color.Cyan))
-                            {
-                                g.FillRectangle(symbolBrush, foot.X - 3, foot.Y - 3, 6, 6);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        private Point CalculatePerpendicularFoot(Measurement baseLine, Point point)
-        {
-            Point A = baseLine.Start;
-            Point B = baseLine.End;
-
-            double dx = B.X - A.X;
-            double dy = B.Y - A.Y;
-            double lengthSquared = dx * dx + dy * dy;
-
-            if (lengthSquared == 0) return A;
-
-            double t = ((point.X - A.X) * dx + (point.Y - A.Y) * dy) / lengthSquared;
-            t = Math.Max(0, Math.Min(1, t));
-
-            return new Point(
-                (int)(A.X + t * dx),
-                (int)(A.Y + t * dy)
-            );
-        }
-
-        private void DrawHoverLabel(Graphics g, Point point, string text)
-        {
-            using (System.Drawing.Font font = new System.Drawing.Font("Arial", 9, FontStyle.Bold))
-            using (Brush textBrush = new SolidBrush(Color.White))
-            using (Brush bgBrush = new SolidBrush(Color.FromArgb(220, 0, 0, 0)))
-            {
-                SizeF textSize = g.MeasureString(text, font);
-
-                // Position label above the point
-                RectangleF textRect = new RectangleF(
-                    point.X - textSize.Width / 2,
-                    point.Y - textSize.Height - 15,
-                    textSize.Width + 8,
-                    textSize.Height + 4);
-
-                // Draw background with rounded corners
-                g.FillRectangle(bgBrush, textRect);
-                g.DrawRectangle(Pens.White, textRect.X, textRect.Y, textRect.Width, textRect.Height);
-
-                // Draw text
-                g.DrawString(text, font, textBrush,
-                    point.X - textSize.Width / 2 + 4,
-                    point.Y - textSize.Height - 13);
-            }
-        }
-
-        private void DrawAngleArcPreview(Graphics g, Point vertex, Point point1, Point point2)
-        {
-            // Vectors from vertex
-            Point v1 = new Point(point1.X - vertex.X, point1.Y - vertex.Y);
-            Point v2 = new Point(point2.X - vertex.X, point2.Y - vertex.Y);
-
-            // Check: avoid case where point1 == vertex or point2 == vertex
-            if ((v1.X == 0 && v1.Y == 0) || (v2.X == 0 && v2.Y == 0))
-                return;
-
-            // Initial angles
-            double angle1 = Math.Atan2(v1.Y, v1.X) * (180 / Math.PI);
-            double angle2 = Math.Atan2(v2.Y, v2.X) * (180 / Math.PI);
-
-            if (angle1 < 0) angle1 += 360;
-            if (angle2 < 0) angle2 += 360;
-
-            float startAngle, sweepAngle;
-
-            double diff = Math.Abs(angle1 - angle2);
-
-            if (diff <= 180)
-            {
-                startAngle = (float)Math.Min(angle1, angle2);
-                sweepAngle = (float)diff;
-            }
-            else
-            {
-                startAngle = (float)Math.Max(angle1, angle2);
-                sweepAngle = (float)(360 - diff);
-
-                if (sweepAngle > 180)
-                    sweepAngle = 360 - sweepAngle;
-            }
-
-            // Check: valid angles before DrawArc
-            if (float.IsNaN(startAngle) || float.IsNaN(sweepAngle) ||
-                float.IsInfinity(startAngle) || float.IsInfinity(sweepAngle) ||
-                Math.Abs(sweepAngle) < 0.01f)
-            {
-                return;
-            }
-
-            // Calculate angle value
-            double dotProduct = v1.X * v2.X + v1.Y * v2.Y;
-            double mag1 = Math.Sqrt(v1.X * v1.X + v1.Y * v1.Y);
-            double mag2 = Math.Sqrt(v2.X * v2.X + v2.Y * v2.Y);
-
-            double angleValue = 0;
-            if (mag1 > 0 && mag2 > 0)
-            {
-                double cosTheta = dotProduct / (mag1 * mag2);
-
-                // Clamp to avoid NaN due to floating point inaccuracies
-                cosTheta = Math.Max(-1, Math.Min(1, cosTheta));
-
-                angleValue = Math.Acos(cosTheta) * (180 / Math.PI);
-            }
-
-            // Draw arc
-            using (Pen arcPen = new Pen(Color.FromArgb(150, Color.Orange), 2))
-            {
-                arcPen.DashStyle = DashStyle.Dash;
-                g.DrawArc(arcPen, vertex.X - 30, vertex.Y - 30, 60, 60, startAngle, sweepAngle);
-            }
-
-            // Draw angle text
-            using (System.Drawing.Font font = new System.Drawing.Font("Arial", 9))
-            using (Brush textBrush = new SolidBrush(Color.White))
-            using (Brush bgBrush = new SolidBrush(Color.FromArgb(150, Color.Black)))
-            {
-                string angleText = $"{angleValue:F1}°";
-                SizeF textSize = g.MeasureString(angleText, font);
-
-                RectangleF textRect = new RectangleF(
-                    vertex.X - textSize.Width / 2,
-                    vertex.Y - textSize.Height - 40,
-                    textSize.Width + 4,
-                    textSize.Height);
-
-                g.FillRectangle(bgBrush, textRect);
-                g.DrawString(angleText, font, textBrush,
-                    vertex.X - textSize.Width / 2 + 2,
-                    vertex.Y - textSize.Height - 38);
-            }
-        }
-
-        private void DrawGrid(Graphics g)
-        {
-            using (Pen gridPen = new Pen(Color.FromArgb(100, Color.LightBlue)))
-            using (Pen axisPen = new Pen(Color.Red, 1.5f))
-            {
-                gridPen.DashStyle = DashStyle.Dot;
-
-                // Draw vertical grid lines
-                for (int x = gridOrigin.X % 50; x < pictureBox.Width; x += 50)
-                {
-                    g.DrawLine(gridPen, x, 0, x, pictureBox.Height);
-                }
-
-                // Draw horizontal grid lines
-                for (int y = gridOrigin.Y % 50; y < pictureBox.Height; y += 50)
-                {
-                    g.DrawLine(gridPen, 0, y, pictureBox.Width, y);
-                }
-
-                // Draw axes
-                g.DrawLine(axisPen, gridOrigin.X, 0, gridOrigin.X, pictureBox.Height); // Y-axis
-                g.DrawLine(axisPen, 0, gridOrigin.Y, pictureBox.Width, gridOrigin.Y);   // X-axis
-
-                // Draw grid origin point
-                g.FillEllipse(Brushes.Red, gridOrigin.X - 5, gridOrigin.Y - 5, 10, 10);
-            }
-        }
-
-        private void DrawAngleHelpers(Graphics g, Point start, Point end)
-        {
-            // Calculate potential perpendicular endpoints for 90° assistance
-            int dx = end.X - start.X;
-            int dy = end.Y - start.Y;
-
-            // Horizontal helper
-            Point horizontalEnd = new Point(end.X, start.Y);
-            using (Pen helperPen = new Pen(Color.FromArgb(100, Color.Green)) { DashStyle = DashStyle.Dot })
-            {
-                g.DrawLine(helperPen, start, horizontalEnd);
-            }
-
-            // Vertical helper
-            Point verticalEnd = new Point(start.X, end.Y);
-            using (Pen helperPen = new Pen(Color.FromArgb(100, Color.Blue)) { DashStyle = DashStyle.Dot })
-            {
-                g.DrawLine(helperPen, start, verticalEnd);
-            }
-
-            // Show angle information
-            double angle = Math.Atan2(dy, dx) * (180 / Math.PI);
-            using (System.Drawing.Font font = new System.Drawing.Font("Arial", 9))
-            using (Brush brush = new SolidBrush(Color.White))
-            using (Brush bgBrush = new SolidBrush(Color.FromArgb(128, Color.Black)))
-            {
-                string angleText = $"{angle:F1}°";
-                SizeF textSize = g.MeasureString(angleText, font);
-                Point midPoint = new Point((start.X + end.X) / 2, (start.Y + end.Y) / 2);
-
-                RectangleF textRect = new RectangleF(
-                    midPoint.X - textSize.Width / 2,
-                    midPoint.Y - textSize.Height - 5,
-                    textSize.Width + 4,
-                    textSize.Height);
-
-                g.FillRectangle(bgBrush, textRect);
-                g.DrawString(angleText, font, brush, midPoint.X - textSize.Width / 2 + 2, midPoint.Y - textSize.Height - 3);
-            }
-        }
-
-        private void DrawMeasurement(Graphics g, Measurement m)
-        {
-            Color color = m.IsSelected ? Color.Yellow : GetMeasurementColor(m.Type);
-            int lineWidth = m.IsSelected ? 3 : 2; // Thicker line for selected measurements
-            int pointSize = m.IsSelected ? 8 : 6; // Larger points for selected measurements
-
-            using (Pen pen = new Pen(color, lineWidth))
-            using (Brush brush = new SolidBrush(color))
-            using (System.Drawing.Font font = new System.Drawing.Font("Arial", 9, FontStyle.Bold))
-            using (Brush textBrush = new SolidBrush(Color.White))
-            using (Brush bgBrush = new SolidBrush(Color.FromArgb(200, Color.Black)))
-            {
-                switch (m.Type)
-                {
-                    case MeasurementType.Point:
-                        g.FillEllipse(brush, m.Start.X - pointSize / 2, m.Start.Y - pointSize / 2, pointSize, pointSize);
-
-                        // Draw ID near the point
-                        string pointId = m.ID.ToString();
-                        SizeF idSize = g.MeasureString(pointId, font);
-                        RectangleF idRect = new RectangleF(
-                            m.Start.X + 8, m.Start.Y - idSize.Height / 2,
-                            idSize.Width + 4, idSize.Height);
-                        g.FillRectangle(bgBrush, idRect);
-                        g.DrawString(pointId, font, textBrush, m.Start.X + 10, m.Start.Y - idSize.Height / 2);
-                        break;
-
-                    case MeasurementType.Line:
-                        g.DrawLine(pen, m.Start, m.End);
-                        g.FillEllipse(brush, m.Start.X - pointSize / 2, m.Start.Y - pointSize / 2, pointSize, pointSize);
-                        g.FillEllipse(brush, m.End.X - pointSize / 2, m.End.Y - pointSize / 2, pointSize, pointSize);
-
-                        // Draw ID at midpoint
-                        string lineId = m.ID.ToString();
-                        SizeF lineIdSize = g.MeasureString(lineId, font);
-                        Point lineMidPoint = new Point((m.Start.X + m.End.X) / 2, (m.Start.Y + m.End.Y) / 2);
-                        RectangleF lineIdRect = new RectangleF(
-                            lineMidPoint.X - lineIdSize.Width / 2, lineMidPoint.Y - lineIdSize.Height - 10,
-                            lineIdSize.Width + 4, lineIdSize.Height);
-                        g.FillRectangle(bgBrush, lineIdRect);
-                        g.DrawString(lineId, font, textBrush, lineMidPoint.X - lineIdSize.Width / 2 + 2, lineMidPoint.Y - lineIdSize.Height - 8);
-                        break;
-
-                    case MeasurementType.Distance:
-                    case MeasurementType.ReferenceLine:
-                        g.DrawLine(pen, m.Start, m.End);
-                        g.FillEllipse(brush, m.Start.X - pointSize / 2, m.Start.Y - pointSize / 2, pointSize, pointSize);
-                        g.FillEllipse(brush, m.End.X - pointSize / 2, m.End.Y - pointSize / 2, pointSize, pointSize);
-
-                        // Draw measurement value with ID
-                        double distance = CalculateDistance(m.Start, m.End);
-                        string distText = m.Type == MeasurementType.ReferenceLine ?
-                            $"{m.ID}: {distance / pixelToRealRatio:F1} cm" :
-                            isReferenceSet ?
-                                $"{m.ID}" :
-                                $"{m.ID}";
-
-                        Point midPoint = new Point(
-                            (m.Start.X + m.End.X) / 2,
-                            (m.Start.Y + m.End.Y) / 2);
-
-                        SizeF textSize = g.MeasureString(distText, font);
-                        RectangleF textRect = new RectangleF(
-                            midPoint.X - textSize.Width / 2, midPoint.Y - textSize.Height - 10,
-                            textSize.Width + 4, textSize.Height);
-                        g.FillRectangle(bgBrush, textRect);
-                        g.DrawString(distText, font, textBrush,
-                            midPoint.X - textSize.Width / 2 + 2, midPoint.Y - textSize.Height - 8);
-                        break;
-
-                    case MeasurementType.Angle:
-                        if (m.Vertex.HasValue)
-                        {
-                            // Draw the segment
-                            g.DrawLine(pen, m.Vertex.Value, m.End);
-                            g.FillEllipse(brush, m.Vertex.Value.X - pointSize / 2, m.Vertex.Value.Y - pointSize / 2, pointSize, pointSize);
-                            g.FillEllipse(brush, m.End.X - pointSize / 2, m.End.Y - pointSize / 2, pointSize, pointSize);
-
-                            // Find the other segment that shares the same vertex and ID
-                            Measurement otherSegment = measurements.FirstOrDefault(meas =>
-                                meas.Type == MeasurementType.Angle &&
-                                meas.Vertex.HasValue &&
-                                meas.Vertex.Value == m.Vertex.Value &&
-                                meas.ID == m.ID &&
-                                meas.End != m.End);
-
-                            if (otherSegment.Type == MeasurementType.Angle)
-                            {
-                                // Draw angle value at vertex with ID
-                                double angle = CalculateAngle(m, otherSegment);
-                                string angleText = $"{m.ID}";
-
-                                SizeF angleTextSize = g.MeasureString(angleText, font);
-                                RectangleF angleTextRect = new RectangleF(
-                                    m.Vertex.Value.X - angleTextSize.Width / 2,
-                                    m.Vertex.Value.Y - angleTextSize.Height - 20,
-                                    angleTextSize.Width + 4,
-                                    angleTextSize.Height);
-                                g.FillRectangle(bgBrush, angleTextRect);
-                                g.DrawString(angleText, font, textBrush,
-                                    m.Vertex.Value.X - angleTextSize.Width / 2 + 2,
-                                    m.Vertex.Value.Y - angleTextSize.Height - 18);
-
-                                // Draw angle arc
-                                DrawAngleArc(g, m, otherSegment);
-                            }
-                        }
-                        break;
-
-                    case MeasurementType.AngleWithAxis:
-                        g.DrawLine(pen, m.Start, m.End);
-                        g.FillEllipse(brush, m.Start.X - pointSize / 2, m.Start.Y - pointSize / 2, pointSize, pointSize);
-                        g.FillEllipse(brush, m.End.X - pointSize / 2, m.End.Y - pointSize / 2, pointSize, pointSize);
-
-                        // Draw angle value with ID
-                        double axisAngle = CalculateAngleWithAxis(m);
-                        string axisAngleText = $"{m.ID}";
-
-                        SizeF axisTextSize = g.MeasureString(axisAngleText, font);
-                        Point lineMidPoint1 = new Point(
-                            (m.Start.X + m.End.X) / 2,
-                            (m.Start.Y + m.End.Y) / 2);
-                        RectangleF axisTextRect = new RectangleF(
-                            lineMidPoint1.X - axisTextSize.Width / 2,
-                            lineMidPoint1.Y - axisTextSize.Height - 10,
-                            axisTextSize.Width + 4,
-                            axisTextSize.Height);
-                        g.FillRectangle(bgBrush, axisTextRect);
-                        g.DrawString(axisAngleText, font, textBrush,
-                            lineMidPoint1.X - axisTextSize.Width / 2 + 2,
-                            lineMidPoint1.Y - axisTextSize.Height - 8);
-
-                        // Draw angle arc relative to axis
-                        DrawAxisAngleArc(g, m);
-                        break;
-
-                    case MeasurementType.PerpendicularLine:
-                        g.DrawLine(pen, m.Start, m.End);
-                        g.FillEllipse(brush, m.Start.X - pointSize / 2, m.Start.Y - pointSize / 2, pointSize, pointSize);
-                        g.FillEllipse(brush, m.End.X - pointSize / 2, m.End.Y - pointSize / 2, pointSize, pointSize);
-
-                        // Draw perpendicular symbol at the intersection point
-                        using (Pen perpendicularPen = new Pen(Color.White, 1))
-                        {
-                            int symbolSize = 4;
-                            g.DrawRectangle(perpendicularPen, m.Start.X - symbolSize, m.Start.Y - symbolSize, symbolSize * 2, symbolSize * 2);
-                        }
-
-                        // Draw ID
-                        string perpId = m.ID.ToString();
-                        SizeF perpTextSize = g.MeasureString(perpId, font);
-                        Point perpMidPoint = new Point((m.Start.X + m.End.X) / 2, (m.Start.Y + m.End.Y) / 2);
-                        RectangleF perpTextRect = new RectangleF(
-                            perpMidPoint.X - perpTextSize.Width / 2, perpMidPoint.Y - perpTextSize.Height - 10,
-                            perpTextSize.Width + 4, perpTextSize.Height);
-                        g.FillRectangle(bgBrush, perpTextRect);
-                        g.DrawString(perpId, font, textBrush, perpMidPoint.X - perpTextSize.Width / 2 + 2, perpMidPoint.Y - perpTextSize.Height - 8);
-                        break;
-                }
-            }
-        }
-
-        private int FindAngleMeasurementAtPoint(Point point)
-        {
-            for (int i = 0; i < measurements.Count; i++)
-            {
-                if (measurements[i].Type == MeasurementType.Angle &&
-                    measurements[i].Vertex.HasValue &&
-                    IsPointNearLine(point, measurements[i].Vertex.Value, measurements[i].End, 8))
-                {
-                    return i;
-                }
-            }
-            return -1;
-        }
-
-        private void DrawAngleArc(Graphics g, Measurement m1, Measurement m2)
-        {
-            if (m1.Type != MeasurementType.Angle || !m1.Vertex.HasValue ||
-                m2.Type != MeasurementType.Angle || !m2.Vertex.HasValue) return;
-
-            // Calculate vectors from vertex to endpoints
-            Point v1 = new Point(m1.End.X - m1.Vertex.Value.X, m1.End.Y - m1.Vertex.Value.Y);
-            Point v2 = new Point(m2.End.X - m2.Vertex.Value.X, m2.End.Y - m2.Vertex.Value.Y);
-
-            // Calculate angles in degrees (0 to 360)
-            double angle1 = Math.Atan2(v1.Y, v1.X) * (180 / Math.PI);
-            double angle2 = Math.Atan2(v2.Y, v2.X) * (180 / Math.PI);
-
-            // Ensure angles are positive (0 to 360)
-            if (angle1 < 0) angle1 += 360;
-            if (angle2 < 0) angle2 += 360;
-
-            // Determine start angle and sweep angle
-            float startAngle, sweepAngle;
-
-            // Calculate the smaller angle between the two vectors
-            double diff = Math.Abs(angle1 - angle2);
-            double smallerAngle = Math.Min(diff, 360 - diff);
-
-            // Always draw the smaller angle (the actual angle between the segments)
-            if (diff <= 180)
-            {
-                startAngle = (float)Math.Min(angle1, angle2);
-                sweepAngle = (float)Math.Abs(angle1 - angle2);
-            }
-            else
-            {
-                // For angles > 180, we need to draw the complementary angle
-                // but we want to show the actual smaller angle
-                startAngle = (float)Math.Max(angle1, angle2);
-                sweepAngle = (float)(360 - Math.Abs(angle1 - angle2));
-
-                // Adjust to always show the interior angle
-                if (sweepAngle > 180) sweepAngle = 360 - sweepAngle;
-            }
-
-            using (Pen arcPen = new Pen(Color.FromArgb(100, Color.Orange), 2))
-            {
-                arcPen.DashStyle = DashStyle.Dash;
-                g.DrawArc(arcPen, m1.Vertex.Value.X - 30, m1.Vertex.Value.Y - 30, 60, 60, startAngle, sweepAngle);
-            }
-        }
-
-        private void DrawAxisAngleArc(Graphics g, Measurement m)
-        {
-            if (m.Type != MeasurementType.AngleWithAxis || !m.Axis.HasValue) return;
-
-            double angle = CalculateAngleWithAxis(m);
-            float startAngle = 0;
-            float sweepAngle = (float)angle;
-
-            if (m.Axis == AxisType.X)
-            {
-                startAngle = 0;
-            }
-            else
-            {
-                startAngle = 90;
-            }
-
-            Point lineMidPoint = new Point(
-                (m.Start.X + m.End.X) / 2,
-                (m.Start.Y + m.End.Y) / 2);
-
-            using (Pen arcPen = new Pen(Color.FromArgb(100, Color.Orange), 2))
-            {
-                arcPen.DashStyle = DashStyle.Dash;
-                g.DrawArc(arcPen, lineMidPoint.X - 30, lineMidPoint.Y - 30, 60, 60, startAngle, sweepAngle);
-            }
-        }
-
-        private Color GetMeasurementColor(MeasurementType type)
-        {
-            switch (type)
-            {
-                case MeasurementType.Line: return Color.LimeGreen;
-                case MeasurementType.Point: return Color.Magenta;
-                case MeasurementType.Angle: return Color.Cyan;
-                case MeasurementType.AngleWithAxis: return Color.Blue;
-                case MeasurementType.Distance: return Color.Orange;
-                case MeasurementType.ReferenceLine: return Color.Red;
-                case MeasurementType.PerpendicularLine: return Color.Violet;
-                default: return Color.White;
-            }
-        }
+        #region PDF Export
 
         private void ExportToPdf()
         {
-            if (pictureBox.Image == null)
+            if (originalImage == null)
             {
                 MessageBox.Show("Please load an image first.", "Export Error",
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
@@ -1752,7 +2115,6 @@ namespace kinectProject
                         MessageBox.Show($"PDF exported successfully to:\n{saveDialog.FileName}",
                             "Export Complete", MessageBoxButtons.OK, MessageBoxIcon.Information);
 
-                        // Optionally open the PDF after creation
                         if (MessageBox.Show("Would you like to open the PDF now?", "Open PDF",
                             MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
                         {
@@ -1791,32 +2153,10 @@ namespace kinectProject
 
             // Prepare the image first to calculate its height
             iTextSharp.text.Image pdfImage = null;
-            if (pictureBox.Image != null && originalImage != null)
+            if (originalImage != null)
             {
                 try
                 {
-                    // Calculate scaling factors between PictureBox and original image
-                    float scaleX = (float)originalImage.Width / pictureBox.ClientSize.Width;
-                    float scaleY = (float)originalImage.Height / pictureBox.ClientSize.Height;
-
-                    // For PictureBoxSizeMode.Zoom, we need to calculate the actual image display area
-                    Size imageSize = originalImage.Size;
-                    Size containerSize = pictureBox.ClientSize;
-
-                    float ratioX = (float)containerSize.Width / imageSize.Width;
-                    float ratioY = (float)containerSize.Height / imageSize.Height;
-                    float ratio = Math.Min(ratioX, ratioY);
-
-                    int newWidth = (int)(imageSize.Width * ratio);
-                    int newHeight = (int)(imageSize.Height * ratio);
-
-                    int offsetX = (containerSize.Width - newWidth) / 2;
-                    int offsetY = (containerSize.Height - newHeight) / 2;
-
-                    // Calculate the inverse scaling for measurements
-                    float inverseScaleX = (float)originalImage.Width / newWidth;
-                    float inverseScaleY = (float)originalImage.Height / newHeight;
-
                     // Create a bitmap with the original image dimensions
                     using (Bitmap bmp = new Bitmap(originalImage.Width, originalImage.Height))
                     {
@@ -1825,10 +2165,10 @@ namespace kinectProject
                             g.Clear(Color.White);
                             g.DrawImage(originalImage, 0, 0, originalImage.Width, originalImage.Height);
 
-                            // Draw measurements on the image with scaled coordinates
+                            // Draw measurements on the image
                             foreach (var m in measurements)
                             {
-                                DrawMeasurementOnBitmap(g, m, offsetX, offsetY, inverseScaleX, inverseScaleY);
+                                DrawMeasurementOnBitmap(g, m);
                             }
                         }
 
@@ -1954,23 +2294,10 @@ namespace kinectProject
 
             document.Close();
         }
-        private void DrawMeasurementOnBitmap(Graphics g, Measurement m, int offsetX, int offsetY, float scaleX, float scaleY)
+
+        private void DrawMeasurementOnBitmap(Graphics g, Measurement m)
         {
-            // Scale the measurement coordinates from PictureBox coordinates to original image coordinates
-            Point ScalePoint(Point point)
-            {
-                // Adjust for zoom and center offset, then scale to original image size
-                int scaledX = (int)((point.X - offsetX) * scaleX);
-                int scaledY = (int)((point.Y - offsetY) * scaleY);
-
-                // Ensure coordinates are within image bounds
-                scaledX = Math.Max(0, Math.Min(scaledX, originalImage.Width - 1));
-                scaledY = Math.Max(0, Math.Min(scaledY, originalImage.Height - 1));
-
-                return new Point(scaledX, scaledY);
-            }
-
-            // Similar to DrawMeasurement but for the PDF export bitmap with scaled coordinates
+            // Similar to DrawMeasurement but for the PDF export bitmap
             Color color = GetMeasurementColor(m.Type);
             int lineWidth = 2;
             int pointSize = 6;
@@ -1980,31 +2307,26 @@ namespace kinectProject
             using (System.Drawing.Font font = new System.Drawing.Font("Arial", 10, FontStyle.Bold))
             using (Brush textBrush = new SolidBrush(Color.Black))
             {
-                // Scale all points
-                Point scaledStart = ScalePoint(m.Start);
-                Point scaledEnd = ScalePoint(m.End);
-                Point? scaledVertex = m.Vertex.HasValue ? ScalePoint(m.Vertex.Value) : (Point?)null;
-
                 switch (m.Type)
                 {
                     case MeasurementType.Point:
-                        g.FillEllipse(brush, scaledStart.X - pointSize / 2, scaledStart.Y - pointSize / 2, pointSize, pointSize);
-                        g.DrawString(m.ID.ToString(), font, textBrush, scaledStart.X + 5, scaledStart.Y - 10);
+                        g.FillEllipse(brush, m.Start.X - pointSize / 2, m.Start.Y - pointSize / 2, pointSize, pointSize);
+                        g.DrawString(m.ID.ToString(), font, textBrush, m.Start.X + 5, m.Start.Y - 10);
                         break;
 
                     case MeasurementType.Line:
-                        g.DrawLine(pen, scaledStart, scaledEnd);
-                        g.FillEllipse(brush, scaledStart.X - pointSize / 2, scaledStart.Y - pointSize / 2, pointSize, pointSize);
-                        g.FillEllipse(brush, scaledEnd.X - pointSize / 2, scaledEnd.Y - pointSize / 2, pointSize, pointSize);
-                        Point lineMidPoint = new Point((scaledStart.X + scaledEnd.X) / 2, (scaledStart.Y + scaledEnd.Y) / 2);
+                        g.DrawLine(pen, m.Start, m.End);
+                        g.FillEllipse(brush, m.Start.X - pointSize / 2, m.Start.Y - pointSize / 2, pointSize, pointSize);
+                        g.FillEllipse(brush, m.End.X - pointSize / 2, m.End.Y - pointSize / 2, pointSize, pointSize);
+                        Point lineMidPoint = new Point((m.Start.X + m.End.X) / 2, (m.Start.Y + m.End.Y) / 2);
                         g.DrawString(m.ID.ToString(), font, textBrush, lineMidPoint.X, lineMidPoint.Y - 15);
                         break;
 
                     case MeasurementType.Distance:
                     case MeasurementType.ReferenceLine:
-                        g.DrawLine(pen, scaledStart, scaledEnd);
-                        g.FillEllipse(brush, scaledStart.X - pointSize / 2, scaledStart.Y - pointSize / 2, pointSize, pointSize);
-                        g.FillEllipse(brush, scaledEnd.X - pointSize / 2, scaledEnd.Y - pointSize / 2, pointSize, pointSize);
+                        g.DrawLine(pen, m.Start, m.End);
+                        g.FillEllipse(brush, m.Start.X - pointSize / 2, m.Start.Y - pointSize / 2, pointSize, pointSize);
+                        g.FillEllipse(brush, m.End.X - pointSize / 2, m.End.Y - pointSize / 2, pointSize, pointSize);
 
                         double distance = CalculateDistance(m.Start, m.End);
                         string distText = m.Type == MeasurementType.ReferenceLine ?
@@ -2013,16 +2335,16 @@ namespace kinectProject
                                 $"{m.ID}: {distance / pixelToRealRatio:F1} cm" :
                                 $"{m.ID}: {distance:F1} px";
 
-                        Point midPoint = new Point((scaledStart.X + scaledEnd.X) / 2, (scaledStart.Y + scaledEnd.Y) / 2);
+                        Point midPoint = new Point((m.Start.X + m.End.X) / 2, (m.Start.Y + m.End.Y) / 2);
                         g.DrawString(distText, font, textBrush, midPoint.X, midPoint.Y - 15);
                         break;
 
                     case MeasurementType.Angle:
-                        if (scaledVertex.HasValue)
+                        if (m.Vertex.HasValue)
                         {
-                            g.DrawLine(pen, scaledVertex.Value, scaledEnd);
-                            g.FillEllipse(brush, scaledVertex.Value.X - pointSize / 2, scaledVertex.Value.Y - pointSize / 2, pointSize, pointSize);
-                            g.FillEllipse(brush, scaledEnd.X - pointSize / 2, scaledEnd.Y - pointSize / 2, pointSize, pointSize);
+                            g.DrawLine(pen, m.Vertex.Value, m.End);
+                            g.FillEllipse(brush, m.Vertex.Value.X - pointSize / 2, m.Vertex.Value.Y - pointSize / 2, pointSize, pointSize);
+                            g.FillEllipse(brush, m.End.X - pointSize / 2, m.End.Y - pointSize / 2, pointSize, pointSize);
 
                             // Find the other segment that shares the same vertex and ID
                             Measurement otherSegment = measurements.FirstOrDefault(meas =>
@@ -2033,39 +2355,39 @@ namespace kinectProject
 
                             if (otherSegment.Type == MeasurementType.Angle)
                             {
-                                Point scaledOtherEnd = ScalePoint(otherSegment.End);
                                 double angle = CalculateAngle(m, otherSegment);
                                 string angleText = $"{m.ID}: {angle:F1}°";
-                                g.DrawString(angleText, font, textBrush, scaledVertex.Value.X, scaledVertex.Value.Y - 20);
+                                g.DrawString(angleText, font, textBrush, m.Vertex.Value.X, m.Vertex.Value.Y - 20);
                             }
                         }
                         break;
 
                     case MeasurementType.AngleWithAxis:
-                        g.DrawLine(pen, scaledStart, scaledEnd);
-                        g.FillEllipse(brush, scaledStart.X - pointSize / 2, scaledStart.Y - pointSize / 2, pointSize, pointSize);
-                        g.FillEllipse(brush, scaledEnd.X - pointSize / 2, scaledEnd.Y - pointSize / 2, pointSize, pointSize);
+                        g.DrawLine(pen, m.Start, m.End);
+                        g.FillEllipse(brush, m.Start.X - pointSize / 2, m.Start.Y - pointSize / 2, pointSize, pointSize);
+                        g.FillEllipse(brush, m.End.X - pointSize / 2, m.End.Y - pointSize / 2, pointSize, pointSize);
 
                         double axisAngle = CalculateAngleWithAxis(m);
                         string axisAngleText = $"{m.ID}: {axisAngle:F1}° to {m.Axis}";
-                        Point axisMidPoint = new Point((scaledStart.X + scaledEnd.X) / 2, (scaledStart.Y + scaledEnd.Y) / 2);
+                        Point axisMidPoint = new Point((m.Start.X + m.End.X) / 2, (m.Start.Y + m.End.Y) / 2);
                         g.DrawString(axisAngleText, font, textBrush, axisMidPoint.X, axisMidPoint.Y - 15);
                         break;
-                    case MeasurementType.PerpendicularLine: // ← Ajouter ce cas
-                        g.DrawLine(pen, scaledStart, scaledEnd);
-                        g.FillEllipse(brush, scaledStart.X - pointSize / 2, scaledStart.Y - pointSize / 2, pointSize, pointSize);
-                        g.FillEllipse(brush, scaledEnd.X - pointSize / 2, scaledEnd.Y - pointSize / 2, pointSize, pointSize);
+
+                    case MeasurementType.PerpendicularLine:
+                        g.DrawLine(pen, m.Start, m.End);
+                        g.FillEllipse(brush, m.Start.X - pointSize / 2, m.Start.Y - pointSize / 2, pointSize, pointSize);
+                        g.FillEllipse(brush, m.End.X - pointSize / 2, m.End.Y - pointSize / 2, pointSize, pointSize);
 
                         double perpLength = CalculateDistance(m.Start, m.End);
-                        string perpText = $"{m.ID}: "; 
+                        string perpText = $"{m.ID}: ";
 
-                        Point perpMidPoint = new Point((scaledStart.X + scaledEnd.X) / 2, (scaledStart.Y + scaledEnd.Y) / 2);
+                        Point perpMidPoint = new Point((m.Start.X + m.End.X) / 2, (m.Start.Y + m.End.Y) / 2);
                         g.DrawString(perpText, font, textBrush, perpMidPoint.X, perpMidPoint.Y - 15);
 
                         // Draw perpendicular symbol
                         using (Pen symbolPen = new Pen(Color.Black, 1))
                         {
-                            g.DrawRectangle(symbolPen, scaledStart.X - 2, scaledStart.Y - 2, 4, 4);
+                            g.DrawRectangle(symbolPen, m.Start.X - 2, m.Start.Y - 2, 4, 4);
                         }
                         break;
                 }
@@ -2108,7 +2430,7 @@ namespace kinectProject
                 case MeasurementType.Line:
                 case MeasurementType.Distance:
                 case MeasurementType.ReferenceLine:
-                case MeasurementType.PerpendicularLine: // ← Ajouter cette ligne
+                case MeasurementType.PerpendicularLine:
                     double pixels = CalculateDistance(m.Start, m.End);
                     return $"{pixels:F1} px";
 
@@ -2128,7 +2450,6 @@ namespace kinectProject
             }
         }
 
-
         private string GetRealValueString(Measurement m)
         {
             if (!isReferenceSet && m.Type != MeasurementType.ReferenceLine)
@@ -2137,7 +2458,7 @@ namespace kinectProject
             switch (m.Type)
             {
                 case MeasurementType.Distance:
-                case MeasurementType.PerpendicularLine: // ← Ajouter cette ligne
+                case MeasurementType.PerpendicularLine:
                     double pixels = CalculateDistance(m.Start, m.End);
                     double realUnits = pixels / pixelToRealRatio;
                     return $"{realUnits:F2} cm";
@@ -2157,339 +2478,229 @@ namespace kinectProject
             }
         }
 
-        private void CreatePerpendicularLine(Measurement baseLine, Point endPoint)
+        #endregion
+
+        protected override void OnResize(EventArgs e)
         {
-            Point A = baseLine.Start;
-            Point B = baseLine.End;
-            Point C = endPoint;
-
-            // Calculate the perpendicular projection of point C onto line AB
-            double dx = B.X - A.X;
-            double dy = B.Y - A.Y;
-            double lengthSquared = dx * dx + dy * dy;
-
-            if (lengthSquared == 0) return; // Avoid division by zero
-
-            // Calculate projection parameter t
-            double t = ((C.X - A.X) * dx + (C.Y - A.Y) * dy) / lengthSquared;
-
-            // Clamp t to [0,1] to ensure the perpendicular foot is on the line segment
-            t = Math.Max(0, Math.Min(1, t));
-
-            // Calculate the perpendicular foot point
-            Point perpendicularFoot = new Point(
-                (int)(A.X + t * dx),
-                (int)(A.Y + t * dy)
-            );
-
-            // Create the perpendicular line measurement
-            Measurement perpendicularLine = new Measurement(
-                perpendicularFoot,
-                C,
-                $"P{measurementCounter++}",
-                MeasurementType.PerpendicularLine,
-                idCounter++
-            );
-
-            measurements.Add(perpendicularLine);
-            UpdateStatus($"Perpendicular line created (ID: {perpendicularLine.ID})");
-        }
-
-        // Dialog for axis selection
-        private class AxisSelectionDialog : Form
-        {
-            public AxisType SelectedAxis { get; private set; }
-
-            public AxisSelectionDialog()
+            base.OnResize(e);
+            if (drawingPanel != null)
             {
-                InitializeComponent();
+                UpdateTransformationMatrices();
+                drawingPanel.Invalidate();
             }
-
-            private void InitializeComponent()
-            {
-                this.Text = "Select Reference Axis";
-                this.Size = new Size(250, 120);
-                this.FormBorderStyle = FormBorderStyle.FixedDialog;
-                this.StartPosition = FormStartPosition.CenterParent;
-
-                Label label = new Label();
-                label.Text = "Select reference axis for angle measurement:";
-                label.Location = new Point(10, 10);
-                label.Size = new Size(220, 30);
-
-                Button xAxisBtn = new Button();
-                xAxisBtn.Text = "X-Axis";
-                xAxisBtn.Location = new Point(20, 50);
-                xAxisBtn.Size = new Size(80, 25);
-                xAxisBtn.Click += (s, e) => { SelectedAxis = AxisType.X; this.DialogResult = DialogResult.OK; };
-
-                Button yAxisBtn = new Button();
-                yAxisBtn.Text = "Y-Axis";
-                yAxisBtn.Location = new Point(120, 50);
-                yAxisBtn.Size = new Size(80, 25);
-                yAxisBtn.Click += (s, e) => { SelectedAxis = AxisType.Y; this.DialogResult = DialogResult.OK; };
-
-                this.Controls.Add(label);
-                this.Controls.Add(xAxisBtn);
-                this.Controls.Add(yAxisBtn);
-            }
-        }
-
-        // Dialog for reference input
-        private class ReferenceInputDialog : Form
-        {
-            private TextBox textBox;
-
-            public float ReferenceLength { get; private set; }
-
-            public ReferenceInputDialog()
-            {
-                InitializeComponent();
-            }
-
-            private void InitializeComponent()
-            {
-                this.Text = "Set Reference Length";
-                this.Size = new Size(300, 150);
-                this.FormBorderStyle = FormBorderStyle.FixedDialog;
-                this.StartPosition = FormStartPosition.CenterParent;
-                this.MaximizeBox = false;
-                this.MinimizeBox = false;
-
-                Label label = new Label();
-                label.Text = "Enter known length in centimeters:";
-                label.Location = new Point(20, 20);
-                label.Size = new Size(250, 20);
-
-                textBox = new TextBox();
-                textBox.Location = new Point(20, 50);
-                textBox.Size = new Size(250, 20);
-
-                Button okButton = new Button();
-                okButton.Text = "OK";
-                okButton.DialogResult = DialogResult.OK;
-                okButton.Location = new Point(60, 80);
-                okButton.Size = new Size(75, 25);
-                okButton.Click += OkButton_Click;
-
-                Button cancelButton = new Button();
-                cancelButton.Text = "Cancel";
-                cancelButton.DialogResult = DialogResult.Cancel;
-                cancelButton.Location = new Point(150, 80);
-                cancelButton.Size = new Size(75, 25);
-
-                this.Controls.Add(label);
-                this.Controls.Add(textBox);
-                this.Controls.Add(okButton);
-                this.Controls.Add(cancelButton);
-                this.AcceptButton = okButton;
-                this.CancelButton = cancelButton;
-            }
-
-            private void OkButton_Click(object sender, EventArgs e)
-            {
-                if (float.TryParse(textBox.Text, out float result) && result > 0)
-                {
-                    ReferenceLength = result;
-                }
-                else
-                {
-                    MessageBox.Show("Please enter a valid positive number.");
-                    this.DialogResult = DialogResult.None;
-                }
-            }
-        }
-
-        // Dialog for renaming measurements
-        private class RenameDialog : Form
-        {
-            private TextBox textBox;
-
-            public string NewName { get; private set; }
-
-            public RenameDialog(string currentName)
-            {
-                InitializeComponent(currentName);
-            }
-
-            private void InitializeComponent(string currentName)
-            {
-                this.Text = "Rename Measurement";
-                this.Size = new Size(300, 150);
-                this.FormBorderStyle = FormBorderStyle.FixedDialog;
-                this.StartPosition = FormStartPosition.CenterParent;
-                this.MaximizeBox = false;
-                this.MinimizeBox = false;
-
-                Label label = new Label();
-                label.Text = "Enter new name for measurement:";
-                label.Location = new Point(20, 20);
-                label.Size = new Size(250, 20);
-
-                textBox = new TextBox();
-                textBox.Text = currentName;
-                textBox.Location = new Point(20, 50);
-                textBox.Size = new Size(250, 20);
-
-                Button okButton = new Button();
-                okButton.Text = "OK";
-                okButton.DialogResult = DialogResult.OK;
-                okButton.Location = new Point(60, 80);
-                okButton.Size = new Size(75, 25);
-                okButton.Click += OkButton_Click;
-
-                Button cancelButton = new Button();
-                cancelButton.Text = "Cancel";
-                cancelButton.DialogResult = DialogResult.Cancel;
-                cancelButton.Location = new Point(150, 80);
-                cancelButton.Size = new Size(75, 25);
-
-                this.Controls.Add(label);
-                this.Controls.Add(textBox);
-                this.Controls.Add(okButton);
-                this.Controls.Add(cancelButton);
-                this.AcceptButton = okButton;
-                this.CancelButton = cancelButton;
-            }
-
-            private void OkButton_Click(object sender, EventArgs e)
-            {
-                if (!string.IsNullOrWhiteSpace(textBox.Text))
-                {
-                    NewName = textBox.Text.Trim();
-                }
-                else
-                {
-                    MessageBox.Show("Please enter a valid name.");
-                    this.DialogResult = DialogResult.None;
-                }
-            }
-        }
-
-        private void BodyPictureAnalyzer_Load(object sender, EventArgs e)
-        {
-
         }
     }
 
+    #region Dialog Classes
 
-     class CustomColorTable : ProfessionalColorTable
+    public enum AxisType { X, Y }
+
+    public class AxisSelectionDialog : Form
     {
-        // Couleur de fond des menus
-        public override Color ToolStripDropDownBackground
+        public AxisType SelectedAxis { get; private set; }
+
+        public AxisSelectionDialog()
         {
-            get { return Color.FromArgb(62, 62, 64); }
+            InitializeComponent();
         }
 
-        // Bordure des menus
-        public override Color MenuBorder
+        private void InitializeComponent()
         {
-            get { return Color.FromArgb(100, 100, 100); }
-        }
+            this.Text = "Select Reference Axis";
+            this.Size = new Size(250, 120);
+            this.FormBorderStyle = FormBorderStyle.FixedDialog;
+            this.StartPosition = FormStartPosition.CenterParent;
 
-        // Fond des items au survol
-        public override Color MenuItemSelected
-        {
-            get { return Color.FromArgb(87, 87, 90); }
-        }
+            Label label = new Label();
+            label.Text = "Select reference axis for angle measurement:";
+            label.Location = new Point(10, 10);
+            label.Size = new Size(220, 30);
 
-        // Dégradé pour les items sélectionnés (unie)
-        public override Color MenuItemSelectedGradientBegin
-        {
-            get { return Color.FromArgb(87, 87, 90); }
-        }
+            Button xAxisBtn = new Button();
+            xAxisBtn.Text = "X-Axis";
+            xAxisBtn.Location = new Point(20, 50);
+            xAxisBtn.Size = new Size(80, 25);
+            xAxisBtn.Click += (s, e) => { SelectedAxis = AxisType.X; this.DialogResult = DialogResult.OK; };
 
-        public override Color MenuItemSelectedGradientEnd
-        {
-            get { return Color.FromArgb(87, 87, 90); }
-        }
+            Button yAxisBtn = new Button();
+            yAxisBtn.Text = "Y-Axis";
+            yAxisBtn.Location = new Point(120, 50);
+            yAxisBtn.Size = new Size(80, 25);
+            yAxisBtn.Click += (s, e) => { SelectedAxis = AxisType.Y; this.DialogResult = DialogResult.OK; };
 
-        // Dégradé pour les items pressés (unie)
-        public override Color MenuItemPressedGradientBegin
-        {
-            get { return Color.FromArgb(75, 75, 78); }
-        }
-
-        public override Color MenuItemPressedGradientMiddle
-        {
-            get { return Color.FromArgb(75, 75, 78); }
-        }
-
-        public override Color MenuItemPressedGradientEnd
-        {
-            get { return Color.FromArgb(75, 75, 78); }
-        }
-
-        // Image margin
-        public override Color ImageMarginGradientBegin
-        {
-            get { return Color.FromArgb(55, 55, 58); }
-        }
-
-        public override Color ImageMarginGradientMiddle
-        {
-            get { return Color.FromArgb(55, 55, 58); }
-        }
-
-        public override Color ImageMarginGradientEnd
-        {
-            get { return Color.FromArgb(55, 55, 58); }
+            this.Controls.Add(label);
+            this.Controls.Add(xAxisBtn);
+            this.Controls.Add(yAxisBtn);
         }
     }
 
-    class CustomToolStripRenderer : ToolStripProfessionalRenderer
+    public class ReferenceInputDialogD : Form
+    {
+        private TextBox textBox;
+        public float ReferenceLength { get; private set; }
+
+        public ReferenceInputDialogD()
+        {
+            InitializeComponent();
+        }
+
+        private void InitializeComponent()
+        {
+            this.Text = "Set Reference Length";
+            this.Size = new Size(300, 150);
+            this.FormBorderStyle = FormBorderStyle.FixedDialog;
+            this.StartPosition = FormStartPosition.CenterParent;
+            this.MaximizeBox = false;
+            this.MinimizeBox = false;
+
+            Label label = new Label();
+            label.Text = "Enter known length in centimeters:";
+            label.Location = new Point(20, 20);
+            label.Size = new Size(250, 20);
+
+            textBox = new TextBox();
+            textBox.Location = new Point(20, 50);
+            textBox.Size = new Size(250, 20);
+
+            Button okButton = new Button();
+            okButton.Text = "OK";
+            okButton.DialogResult = DialogResult.OK;
+            okButton.Location = new Point(60, 80);
+            okButton.Size = new Size(75, 25);
+            okButton.Click += OkButton_Click;
+
+            Button cancelButton = new Button();
+            cancelButton.Text = "Cancel";
+            cancelButton.DialogResult = DialogResult.Cancel;
+            cancelButton.Location = new Point(150, 80);
+            cancelButton.Size = new Size(75, 25);
+
+            this.Controls.Add(label);
+            this.Controls.Add(textBox);
+            this.Controls.Add(okButton);
+            this.Controls.Add(cancelButton);
+            this.AcceptButton = okButton;
+            this.CancelButton = cancelButton;
+        }
+
+        private void OkButton_Click(object sender, EventArgs e)
+        {
+            if (float.TryParse(textBox.Text, out float result) && result > 0)
+            {
+                ReferenceLength = result;
+            }
+            else
+            {
+                MessageBox.Show("Please enter a valid positive number.");
+                this.DialogResult = DialogResult.None;
+            }
+        }
+    }
+
+    public class RenameDialog : Form
+    {
+        private TextBox textBox;
+        public string NewName { get; private set; }
+
+        public RenameDialog(string currentName)
+        {
+            InitializeComponent(currentName);
+        }
+
+        private void InitializeComponent(string currentName)
+        {
+            this.Text = "Rename Measurement";
+            this.Size = new Size(300, 150);
+            this.FormBorderStyle = FormBorderStyle.FixedDialog;
+            this.StartPosition = FormStartPosition.CenterParent;
+            this.MaximizeBox = false;
+            this.MinimizeBox = false;
+
+            Label label = new Label();
+            label.Text = "Enter new name for measurement:";
+            label.Location = new Point(20, 20);
+            label.Size = new Size(250, 20);
+
+            textBox = new TextBox();
+            textBox.Text = currentName;
+            textBox.Location = new Point(20, 50);
+            textBox.Size = new Size(250, 20);
+
+            Button okButton = new Button();
+            okButton.Text = "OK";
+            okButton.DialogResult = DialogResult.OK;
+            okButton.Location = new Point(60, 80);
+            okButton.Size = new Size(75, 25);
+            okButton.Click += OkButton_Click;
+
+            Button cancelButton = new Button();
+            cancelButton.Text = "Cancel";
+            cancelButton.DialogResult = DialogResult.Cancel;
+            cancelButton.Location = new Point(150, 80);
+            cancelButton.Size = new Size(75, 25);
+
+            this.Controls.Add(label);
+            this.Controls.Add(textBox);
+            this.Controls.Add(okButton);
+            this.Controls.Add(cancelButton);
+            this.AcceptButton = okButton;
+            this.CancelButton = cancelButton;
+        }
+
+        private void OkButton_Click(object sender, EventArgs e)
+        {
+            if (!string.IsNullOrWhiteSpace(textBox.Text))
+            {
+                NewName = textBox.Text.Trim();
+            }
+            else
+            {
+                MessageBox.Show("Please enter a valid name.");
+                this.DialogResult = DialogResult.None;
+            }
+        }
+    }
+
+    #endregion
+
+    #region Custom ToolStrip Renderers and DoubleBufferedPanel
+
+    public class CustomColorTable : ProfessionalColorTable
+    {
+        public override Color ToolStripDropDownBackground => Color.FromArgb(62, 62, 64);
+        public override Color MenuBorder => Color.FromArgb(100, 100, 100);
+        public override Color MenuItemSelected => Color.FromArgb(87, 87, 90);
+        public override Color MenuItemSelectedGradientBegin => Color.FromArgb(87, 87, 90);
+        public override Color MenuItemSelectedGradientEnd => Color.FromArgb(87, 87, 90);
+        public override Color ImageMarginGradientBegin => Color.FromArgb(55, 55, 58);
+        public override Color ImageMarginGradientMiddle => Color.FromArgb(55, 55, 58);
+        public override Color ImageMarginGradientEnd => Color.FromArgb(55, 55, 58);
+    }
+
+    public class CustomToolStripRenderer : ToolStripProfessionalRenderer
     {
         public CustomToolStripRenderer() : base(new CustomColorTable()) { }
 
         protected override void OnRenderArrow(ToolStripArrowRenderEventArgs e)
         {
-            e.ArrowColor = Color.White; // Flèche blanche pour les menus overflow
+            e.ArrowColor = Color.White;
             base.OnRenderArrow(e);
         }
 
         protected override void OnRenderItemText(ToolStripItemTextRenderEventArgs e)
         {
-            e.TextColor = Color.White; // Texte toujours blanc
+            e.TextColor = Color.White;
             base.OnRenderItemText(e);
         }
+    }
 
-        protected override void OnRenderOverflowButtonBackground(ToolStripItemRenderEventArgs e)
+    public class DoubleBufferedPanel : Panel
+    {
+        public DoubleBufferedPanel()
         {
-            // Style personnalisé pour le bouton overflow
-            var rect = new System.Drawing.Rectangle(0, 0, e.Item.Width - 1, e.Item.Height - 1);
-            var buttonRect = new System.Drawing.Rectangle(rect.X - 5, rect.Y, rect.Width + 5, rect.Height);
-
-            // Fond du bouton overflow
-            using (var brush = new SolidBrush(Color.FromArgb(62, 62, 64)))
-                e.Graphics.FillRectangle(brush, buttonRect);
-
-            // Bordure
-            using (var pen = new Pen(Color.FromArgb(100, 100, 100)))
-                e.Graphics.DrawRectangle(pen, buttonRect);
-
-            // Dessiner les flèches
-            using (var pen = new Pen(Color.White, 2))
-            {
-                int arrowSize = 4;
-                int centerX = buttonRect.Width / 2 - 3;
-                int centerY = buttonRect.Height / 2;
-
-                // Flèche droite
-                e.Graphics.DrawLine(pen,
-                    centerX, centerY - arrowSize,
-                    centerX + arrowSize, centerY);
-                e.Graphics.DrawLine(pen,
-                    centerX + arrowSize, centerY,
-                    centerX, centerY + arrowSize);
-
-                // Flèche droite supplémentaire
-                e.Graphics.DrawLine(pen,
-                    centerX + 3, centerY - arrowSize,
-                    centerX + 3 + arrowSize, centerY);
-                e.Graphics.DrawLine(pen,
-                    centerX + 3 + arrowSize, centerY,
-                    centerX + 3, centerY + arrowSize);
-            }
+            this.DoubleBuffered = true;
         }
     }
+
+    #endregion
 }
