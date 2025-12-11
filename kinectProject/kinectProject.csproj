@@ -117,6 +117,9 @@
     <Reference Include="WindowsBase" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="AutoRenameDialog.cs">
+      <SubType>Form</SubType>
+    </Compile>
     <Compile Include="CurveData.cs" />
     <Compile Include="CurveDataViewer.cs">
       <SubType>Form</SubType>

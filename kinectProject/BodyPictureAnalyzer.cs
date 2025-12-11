@@ -85,6 +85,9 @@ namespace kinectProject
         private ToolStrip toolStrip;
         private StatusStrip statusStrip;
         private ListView measurementsList;
+        //
+        // Dans la section des champs privés
+        private bool autoRenameEnabled = true; // Par défaut activé
 
         public BodyPictureAnalyzer()
         {
@@ -114,7 +117,7 @@ namespace kinectProject
             this.BackColor = Color.FromArgb(45, 45, 48);
             this.ForeColor = Color.White;
 
-            // Toolstrip setup
+            // Toolstrip setup - CRÉER LE TOOLSTRIP D'ABORD
             toolStrip = new ToolStrip();
             toolStrip.Dock = DockStyle.Top;
             toolStrip.BackColor = Color.FromArgb(62, 62, 64);
@@ -122,7 +125,7 @@ namespace kinectProject
             toolStrip.RenderMode = ToolStripRenderMode.Professional;
             toolStrip.Renderer = new CustomToolStripRenderer();
 
-            // Toolstrip buttons
+            // Toolstrip buttons - AJOUTER LES BOUTONS APRÈS AVOIR CRÉÉ LE TOOLSTRIP
             AddToolButton("📁 Import Image", BtnImport_Click);
             AddToolSeparator();
 
@@ -153,6 +156,9 @@ namespace kinectProject
             AddToolButton("🔍 Zoom Fit", BtnZoomFit_Click);
             AddToolButton("🔍 Zoom 100%", BtnZoomReset_Click);
             AddToolButton("✋ Pan", BtnPan_Click);
+
+            // Auto-rename button - AJOUTEZ-LE ICI, APRÈS LA CRÉATION DU TOOLSTRIP
+            AddToolButton("🏷️ Auto-Rename", BtnToggleAutoRename_Click);
 
             // Drawing panel - Using DoubleBufferedPanel for smooth zoom
             drawingPanel = new DoubleBufferedPanel();
@@ -195,15 +201,32 @@ namespace kinectProject
             statusStrip.BackColor = Color.FromArgb(62, 62, 64);
             statusStrip.ForeColor = Color.White;
 
-            // Add controls to form
+            // Add controls to form - AJOUTEZ LES CONTRÔLES DANS LE BON ORDRE
             this.Controls.Add(drawingPanel);
             this.Controls.Add(measurementsList);
-            this.Controls.Add(toolStrip);
+            this.Controls.Add(toolStrip); // toolStrip doit être ajouté avant statusStrip
             this.Controls.Add(statusStrip);
 
             // Initialize grid origin
             gridOrigin = new Point(drawingPanel.Width / 2, drawingPanel.Height / 2);
             UpdateTransformationMatrices();
+        }
+        private void BtnToggleAutoRename_Click(object sender, EventArgs e)
+        {
+            // Basculer l'état
+            autoRenameEnabled =
+                !autoRenameEnabled;
+            
+
+            // Mettre à jour le texte du bouton
+            var button = sender as ToolStripButton;
+            if (button != null)
+            {
+                button.Text = autoRenameEnabled ?
+                             "🏷️ Auto-Rename: ON" : "🏷️ Auto-Rename: OFF";
+            }
+
+            UpdateStatus($"Auto-rename: {(autoRenameEnabled ? "Enabled" : "Disabled")}");
         }
 
         private void DrawingPanel_Resize(object sender, EventArgs e)
@@ -1221,6 +1244,10 @@ namespace kinectProject
 
         private void HandleMeasurementCreation(Point location)
         {
+            string measurementName = ""; // Nom par défaut
+            Measurement newMeasurement;
+            int newId = idCounter++;
+
             switch (currentTool)
             {
                 case ToolMode.Line:
@@ -1231,27 +1258,43 @@ namespace kinectProject
                     }
                     else
                     {
-                        measurements.Add(new Measurement(
+                        measurementName = $"L{measurementCounter++}";
+                        newMeasurement = new Measurement(
                             currentStartPoint.Value,
                             location,
-                            $"L{measurementCounter++}",
+                            measurementName,
                             MeasurementType.Line,
-                            idCounter++));
+                            newId);
+
+                        // Demander le renommage
+                        measurementName = PromptForRename(measurementName);
+                        newMeasurement.Name = measurementName;
+
+                        measurements.Add(newMeasurement);
                         currentStartPoint = null;
                         UpdateMeasurementsList();
                         drawingPanel.Invalidate();
+                        UpdateStatus($"Line created: {measurementName}");
                     }
                     break;
 
                 case ToolMode.Point:
-                    measurements.Add(new Measurement(
+                    measurementName = $"P{measurementCounter++}";
+                    newMeasurement = new Measurement(
                         location,
                         location,
-                        $"P{measurementCounter++}",
+                        measurementName,
                         MeasurementType.Point,
-                        idCounter++));
+                        newId);
+
+                    // Demander le renommage
+                    measurementName = PromptForRename(measurementName);
+                    newMeasurement.Name = measurementName;
+
+                    measurements.Add(newMeasurement);
                     UpdateMeasurementsList();
                     drawingPanel.Invalidate();
+                    UpdateStatus($"Point created: {measurementName}");
                     break;
 
                 case ToolMode.Angle:
@@ -1267,11 +1310,17 @@ namespace kinectProject
                     }
                     else
                     {
-                        int angleId = idCounter++;
+                        measurementName = $"A{measurementCounter}";
+
+                        // Demander le nom de l'angle une seule fois
+                        measurementName = PromptForRename(measurementName);
+
+                        int angleId = newId;
+
                         Measurement firstSegment = new Measurement(
                             angleVertex.Value,
                             angleFirstPoint.Value,
-                            $"A{measurementCounter}",
+                            measurementName,
                             MeasurementType.Angle,
                             angleId);
                         firstSegment.Vertex = angleVertex.Value;
@@ -1280,7 +1329,7 @@ namespace kinectProject
                         Measurement secondSegment = new Measurement(
                             angleVertex.Value,
                             location,
-                            $"A{measurementCounter}",
+                            measurementName,
                             MeasurementType.Angle,
                             angleId);
                         secondSegment.Vertex = angleVertex.Value;
@@ -1291,6 +1340,7 @@ namespace kinectProject
                         angleFirstPoint = null;
                         UpdateMeasurementsList();
                         drawingPanel.Invalidate();
+                        UpdateStatus($"Angle created: {measurementName}");
                     }
                     break;
 
@@ -1302,13 +1352,19 @@ namespace kinectProject
                     }
                     else
                     {
-                        // Create the line measurement
-                        measurements.Add(new Measurement(
+                        measurementName = $"AA{measurementCounter++}";
+                        newMeasurement = new Measurement(
                             currentStartPoint.Value,
                             location,
-                            $"AA{measurementCounter++}",
+                            measurementName,
                             MeasurementType.AngleWithAxis,
-                            idCounter++));
+                            newId);
+
+                        // Demander le renommage
+                        measurementName = PromptForRename(measurementName);
+                        newMeasurement.Name = measurementName;
+
+                        measurements.Add(newMeasurement);
 
                         // Ask for axis reference
                         var axisDialog = new AxisSelectionDialog();
@@ -1323,6 +1379,7 @@ namespace kinectProject
                         currentStartPoint = null;
                         UpdateMeasurementsList();
                         drawingPanel.Invalidate();
+                        UpdateStatus($"Angle with axis created: {measurementName}");
                     }
                     break;
 
@@ -1334,15 +1391,23 @@ namespace kinectProject
                     }
                     else
                     {
-                        measurements.Add(new Measurement(
+                        measurementName = $"D{measurementCounter++}";
+                        newMeasurement = new Measurement(
                             currentStartPoint.Value,
                             location,
-                            $"D{measurementCounter++}",
+                            measurementName,
                             MeasurementType.Distance,
-                            idCounter++));
+                            newId);
+
+                        // Demander le renommage
+                        measurementName = PromptForRename(measurementName);
+                        newMeasurement.Name = measurementName;
+
+                        measurements.Add(newMeasurement);
                         currentStartPoint = null;
                         UpdateMeasurementsList();
                         drawingPanel.Invalidate();
+                        UpdateStatus($"Distance measurement created: {measurementName}");
                     }
                     break;
 
@@ -1354,12 +1419,19 @@ namespace kinectProject
                     }
                     else
                     {
-                        measurements.Add(new Measurement(
+                        measurementName = $"R{measurementCounter++}";
+                        newMeasurement = new Measurement(
                             currentStartPoint.Value,
                             location,
-                            $"R{measurementCounter++}",
-                            MeasurementType.Distance,
-                            idCounter++));
+                            measurementName,
+                            MeasurementType.Distance, // Temporairement Distance
+                            newId);
+
+                        // Demander le renommage
+                        measurementName = PromptForRename(measurementName);
+                        newMeasurement.Name = measurementName;
+
+                        measurements.Add(newMeasurement);
                         currentStartPoint = null;
                         isSettingReference = true;
                         UpdateMeasurementsList();
@@ -1389,7 +1461,7 @@ namespace kinectProject
                         if (lineIndex >= 0 && (measurements[lineIndex].Type == MeasurementType.Line ||
                                               measurements[lineIndex].Type == MeasurementType.Distance ||
                                               measurements[lineIndex].Type == MeasurementType.ReferenceLine ||
-                                              measurements[lineIndex].Type == MeasurementType.Angle)) // ADD THIS LINE
+                                              measurements[lineIndex].Type == MeasurementType.Angle))
                         {
                             selectedLineForPerpendicular = measurements[lineIndex];
                             isSelectingBaseLine = true;
@@ -1412,7 +1484,11 @@ namespace kinectProject
                         // Second click: create perpendicular line
                         if (selectedLineForPerpendicular.HasValue)
                         {
-                            CreatePerpendicularLine(selectedLineForPerpendicular.Value, location);
+                            measurementName = $"P{measurementCounter++}";
+
+                            // Créer la ligne perpendiculaire
+                            CreatePerpendicularLine(selectedLineForPerpendicular.Value, location, newId, measurementName);
+
                             isSelectingBaseLine = false;
                             selectedLineForPerpendicular = null;
                             DeselectAllMeasurements();
@@ -1421,11 +1497,11 @@ namespace kinectProject
                         }
                     }
                     break;
-
             }
         }
 
-        private void CreatePerpendicularLine(Measurement baseLine, Point endPoint)
+
+        private void CreatePerpendicularLine(Measurement baseLine, Point endPoint, int id, string name)
         {
             Point A, B;
 
@@ -1459,7 +1535,6 @@ namespace kinectProject
             if (baseLine.Type == MeasurementType.Angle)
             {
                 // Allow perpendiculars to extend beyond the angle segment
-                // t can be any value, but we'll limit it to reasonable bounds to prevent extreme lines
                 t = Math.Max(-2, Math.Min(3, t)); // Allow some extension beyond the segment
             }
             else
@@ -1477,22 +1552,57 @@ namespace kinectProject
             // Only create the perpendicular line if the foot point is different from the endpoint
             if (CalculateDistance(perpendicularFoot, C) > 5) // Minimum distance threshold
             {
+                // Demander le renommage
+                name = PromptForRename(name);
+
                 Measurement perpendicularLine = new Measurement(
                     perpendicularFoot,
                     C,
-                    $"P{measurementCounter++}",
+                    name,
                     MeasurementType.PerpendicularLine,
-                    idCounter++
+                    id
                 );
 
                 measurements.Add(perpendicularLine);
-                UpdateStatus($"Perpendicular line created (ID: {perpendicularLine.ID})");
+                UpdateStatus($"Perpendicular line created: {name}");
             }
             else
             {
                 UpdateStatus("Perpendicular line too short - not created");
             }
         }
+
+
+        private string PromptForRename(string defaultName)
+        {
+            // Vérifier si l'utilisateur veut activer/désactiver le renommage automatique
+            if (!autoRenameEnabled)
+            {
+                return defaultName;
+            }
+
+            using (var renameDialog = new AutoRenameDialog(defaultName))
+            {
+                if (renameDialog.ShowDialog() == DialogResult.OK)
+                {
+                    if (renameDialog.DontAskAgain)
+                    {
+                        // Sauvegarder la préférence
+                        autoRenameEnabled = false;
+                     
+                    }
+
+                    return string.IsNullOrWhiteSpace(renameDialog.NewName) ?
+                           defaultName : renameDialog.NewName.Trim();
+                }
+                else
+                {
+                    // Si l'utilisateur annule, utiliser le nom par défaut
+                    return defaultName;
+                }
+            }
+        }
+
         private void HandleSelection(Point location)
         {
             int index = FindMeasurementAtPoint(location);
@@ -2402,6 +2512,7 @@ namespace kinectProject
             cell.Padding = 5;
             table.AddCell(cell);
         }
+
 
         private void AddMeasurementToTable(PdfPTable table, Measurement m, iTextSharp.text.Font font)
         {
