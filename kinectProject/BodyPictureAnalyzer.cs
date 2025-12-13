@@ -1,13 +1,14 @@
-﻿using System;
+﻿using iTextSharp.text;
+using iTextSharp.text.pdf;
+using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.IO;
 using System.Linq;
+using System.Text;
 using System.Windows.Forms;
-using iTextSharp.text;
-using iTextSharp.text.pdf;
-using System.Diagnostics;
 
 namespace kinectProject
 {
@@ -43,7 +44,36 @@ namespace kinectProject
             }
         }
 
-        private enum MeasurementType { Line, Point, Angle, AngleWithAxis, Distance, ReferenceLine, PerpendicularLine }
+        private enum MeasurementType { Line, Point, Angle, AngleWithAxis, Distance, ReferenceLine, PerpendicularLine, None }
+
+        // Ajoutez ces énumérations dans la section des enums
+        private enum IntersectionType { Exact, Proximity, Terminal, None }
+
+        // Ajoutez cette structure après la struct Measurement
+        private struct IntersectionPoint
+        {
+            public Point Location;
+            public List<int> LineIDs; // IDs des lignes qui se croisent
+            public IntersectionType Type;
+            public List<Tuple<int, int, double>> Angles; // (ID1, ID2, Angle)
+            public int ID;
+
+            public IntersectionPoint(Point location, int id)
+            {
+                Location = location;
+                LineIDs = new List<int>();
+                Type = IntersectionType.None;
+                Angles = new List<Tuple<int, int, double>>();
+                ID = id;
+            }
+        }
+
+        // Ajoutez ces champs dans la section "Application state"
+        private List<IntersectionPoint> intersectionPoints = new List<IntersectionPoint>();
+        private int intersectionCounter = 1;
+        private IntersectionPoint? hoveredIntersection = null;
+        private IntersectionPoint? selectedIntersection = null;
+        private const int intersectionTolerance = 10; // pixels
 
         // Application state
         private ToolMode currentTool = ToolMode.None;
@@ -229,6 +259,408 @@ namespace kinectProject
             UpdateStatus($"Auto-rename: {(autoRenameEnabled ? "Enabled" : "Disabled")}");
         }
 
+        /////
+        private void FindAllIntersections()
+        {
+            intersectionPoints.Clear();
+
+            // Filtrer seulement les mesures qui sont des lignes (pas des points simples)
+            var lineMeasurements = measurements.Where(m =>
+                m.Type == MeasurementType.Line ||
+                m.Type == MeasurementType.Distance ||
+                m.Type == MeasurementType.ReferenceLine ||
+                m.Type == MeasurementType.PerpendicularLine ||
+                m.Type == MeasurementType.Angle ||
+                m.Type == MeasurementType.AngleWithAxis).ToList();
+
+            // Pour chaque paire de lignes
+            for (int i = 0; i < lineMeasurements.Count; i++)
+            {
+                for (int j = i + 1; j < lineMeasurements.Count; j++)
+                {
+                    var line1 = lineMeasurements[i];
+                    var line2 = lineMeasurements[j];
+
+                    // Obtenir les points de début et fin pour chaque ligne
+                    Point line1Start, line1End, line2Start, line2End;
+
+                    // Gérer les segments d'angle différemment
+                    if (line1.Type == MeasurementType.Angle && line1.Vertex.HasValue)
+                    {
+                        line1Start = line1.Vertex.Value;
+                        line1End = line1.End;
+                    }
+                    else
+                    {
+                        line1Start = line1.Start;
+                        line1End = line1.End;
+                    }
+
+                    if (line2.Type == MeasurementType.Angle && line2.Vertex.HasValue)
+                    {
+                        line2Start = line2.Vertex.Value;
+                        line2End = line2.End;
+                    }
+                    else
+                    {
+                        line2Start = line2.Start;
+                        line2End = line2.End;
+                    }
+
+                    // 1. Vérifier l'intersection exacte des segments
+                    Point? exactIntersection = FindLineIntersection(line1Start, line1End, line2Start, line2End);
+
+                    if (exactIntersection.HasValue)
+                    {
+                        AddIntersectionPoint(exactIntersection.Value, line1.ID, line2.ID, IntersectionType.Exact);
+                    }
+                    else
+                    {
+                        // 2. Vérifier la proximité des extrémités
+                        CheckProximityIntersections(line1, line2, line1Start, line1End, line2Start, line2End);
+
+                        // 3. Vérifier si les lignes partagent un point terminal
+                        CheckTerminalIntersections(line1, line2, line1Start, line1End, line2Start, line2End);
+                    }
+                }
+            }
+
+            // Calculer les angles pour chaque point d'intersection
+            CalculateAllAngles();
+        }
+
+        private Point? FindLineIntersection(Point p1, Point p2, Point p3, Point p4)
+        {
+            // Formule d'intersection de segments
+            float denom = (p4.Y - p3.Y) * (p2.X - p1.X) - (p4.X - p3.X) * (p2.Y - p1.Y);
+
+            if (Math.Abs(denom) < 0.0001)
+                return null; // Lignes parallèles
+
+            float ua = ((p4.X - p3.X) * (p1.Y - p3.Y) - (p4.Y - p3.Y) * (p1.X - p3.X)) / denom;
+            float ub = ((p2.X - p1.X) * (p1.Y - p3.Y) - (p2.Y - p1.Y) * (p1.X - p3.X)) / denom;
+
+            // Vérifier si l'intersection est dans les segments
+            if (ua >= 0 && ua <= 1 && ub >= 0 && ub <= 1)
+            {
+                int x = (int)(p1.X + ua * (p2.X - p1.X));
+                int y = (int)(p1.Y + ua * (p2.Y - p1.Y));
+                return new Point(x, y);
+            }
+
+            return null;
+        }
+
+        private void CalculateAllAngles()
+        {
+            for (int i = 0; i < intersectionPoints.Count; i++)
+            {
+                var ip = intersectionPoints[i];
+                ip.Angles.Clear();
+
+                if (ip.LineIDs.Count < 2) continue;
+
+                // Obtenir les vecteurs pour chaque ligne
+                var vectors = new List<Tuple<int, PointF>>();
+
+                foreach (int lineId in ip.LineIDs)
+                {
+                    var line = measurements.FirstOrDefault(m => m.ID == lineId);
+                    if (line.Type == MeasurementType.None) continue;
+
+                    PointF vector = GetLineVectorAtPoint(line, ip.Location);
+                    vectors.Add(new Tuple<int, PointF>(lineId, vector));
+                }
+
+                // Pour chaque paire de lignes
+                for (int j = 0; j < vectors.Count; j++)
+                {
+                    for (int k = j + 1; k < vectors.Count; k++)
+                    {
+                        // Éviter les paires de la même ligne
+                        if (vectors[j].Item1 == vectors[k].Item1) continue;
+
+                        // Calculer l'angle entre les vecteurs
+                        double dot = vectors[j].Item2.X * vectors[k].Item2.X +
+                                   vectors[j].Item2.Y * vectors[k].Item2.Y;
+                        double cross = vectors[j].Item2.X * vectors[k].Item2.Y -
+                                     vectors[j].Item2.Y * vectors[k].Item2.X;
+                        double mag1 = Math.Sqrt(vectors[j].Item2.X * vectors[j].Item2.X +
+                                              vectors[j].Item2.Y * vectors[j].Item2.Y);
+                        double mag2 = Math.Sqrt(vectors[k].Item2.X * vectors[k].Item2.X +
+                                              vectors[k].Item2.Y * vectors[k].Item2.Y);
+
+                        if (mag1 == 0 || mag2 == 0) continue;
+
+                        double cosTheta = Math.Max(-1, Math.Min(1, dot / (mag1 * mag2)));
+                        double angleRad = Math.Acos(cosTheta);
+                        double angleDeg = angleRad * (180 / Math.PI);
+
+                        // Toujours prendre l'angle aigu (≤ 90°)
+                        double acuteAngle = Math.Min(angleDeg, 180 - angleDeg);
+                        double obtuseAngle = 180 - acuteAngle;
+
+                        // Stocker les DEUX angles
+                        ip.Angles.Add(new Tuple<int, int, double>(
+                            Math.Min(vectors[j].Item1, vectors[k].Item1),
+                            Math.Max(vectors[j].Item1, vectors[k].Item1),
+                            Math.Round(acuteAngle, 1))); // Angle aigu
+
+                        ip.Angles.Add(new Tuple<int, int, double>(
+                            Math.Min(vectors[j].Item1, vectors[k].Item1),
+                            Math.Max(vectors[j].Item1, vectors[k].Item1),
+                            Math.Round(obtuseAngle, 1))); // Angle obtus
+                    }
+                }
+
+                intersectionPoints[i] = ip;
+            }
+        }
+
+        private PointF GetLineVectorAtPoint(Measurement line, Point intersectionPoint)
+        {
+            Point start, end;
+
+            if (line.Type == MeasurementType.Angle && line.Vertex.HasValue)
+            {
+                start = line.Vertex.Value;
+                end = line.End;
+            }
+            else
+            {
+                start = line.Start;
+                end = line.End;
+            }
+
+            // Déterminer quelle extrémité est la plus proche du point d'intersection
+            double distToStart = CalculateDistance(intersectionPoint, start);
+            double distToEnd = CalculateDistance(intersectionPoint, end);
+
+            // Retourner le vecteur depuis l'intersection vers l'autre extrémité
+            if (distToStart < distToEnd)
+            {
+                // Point d'intersection est proche du début, vecteur vers la fin
+                return new PointF(end.X - intersectionPoint.X, end.Y - intersectionPoint.Y);
+            }
+            else
+            {
+                // Point d'intersection est proche de la fin, vecteur vers le début
+                return new PointF(start.X - intersectionPoint.X, start.Y - intersectionPoint.Y);
+            }
+        }
+
+        private List<PointF> GetLineVectorsAtPoint(Measurement line, Point intersectionPoint)
+        {
+            List<PointF> vectors = new List<PointF>();
+            Point start, end;
+
+            if (line.Type == MeasurementType.Angle && line.Vertex.HasValue)
+            {
+                start = line.Vertex.Value;
+                end = line.End;
+            }
+            else
+            {
+                start = line.Start;
+                end = line.End;
+            }
+
+            // Vecteur depuis l'intersection vers le début
+            PointF vectorToStart = new PointF(start.X - intersectionPoint.X, start.Y - intersectionPoint.Y);
+
+            // Vecteur depuis l'intersection vers la fin
+            PointF vectorToEnd = new PointF(end.X - intersectionPoint.X, end.Y - intersectionPoint.Y);
+
+            // Si l'intersection est exactement à une extrémité, on ne prend que le vecteur vers l'autre extrémité
+            if (CalculateDistance(intersectionPoint, start) < 1)
+            {
+                vectors.Add(vectorToEnd);
+            }
+            else if (CalculateDistance(intersectionPoint, end) < 1)
+            {
+                vectors.Add(vectorToStart);
+            }
+            else
+            {
+                // Pour une intersection au milieu de la ligne, on considère les deux directions
+                vectors.Add(vectorToStart);
+                vectors.Add(vectorToEnd);
+            }
+
+            return vectors;
+        }
+        private List<double> CalculateAnglesBetweenVectors(PointF v1, PointF v2)
+        {
+            List<double> angles = new List<double>();
+
+            double dot = v1.X * v2.X + v1.Y * v2.Y;
+            double cross = v1.X * v2.Y - v1.Y * v2.X; // Produit vectoriel pour le sens
+            double mag1 = Math.Sqrt(v1.X * v1.X + v1.Y * v1.Y);
+            double mag2 = Math.Sqrt(v2.X * v2.X + v2.Y * v2.Y);
+
+            if (mag1 == 0 || mag2 == 0) return new List<double> { 0, 180 };
+
+            double cosTheta = Math.Max(-1, Math.Min(1, dot / (mag1 * mag2)));
+            double angleRad = Math.Acos(cosTheta);
+            double angleDeg = angleRad * (180 / Math.PI);
+
+            // Angle aigu (0-90°) ou droit
+            double acuteAngle = Math.Min(angleDeg, 180 - angleDeg);
+
+            // Angle obtus (90-180°)
+            double obtuseAngle = 180 - acuteAngle;
+
+            // Si les lignes sont perpendiculaires (≈90°)
+            if (Math.Abs(acuteAngle - 90) < 0.1)
+            {
+                angles.Add(90);
+                angles.Add(90);
+            }
+            else
+            {
+                angles.Add(Math.Round(acuteAngle, 1));
+                angles.Add(Math.Round(obtuseAngle, 1));
+            }
+
+            return angles;
+        }
+        private void DrawIntersectionPoints(Graphics g)
+        {
+            foreach (var ip in intersectionPoints)
+            {
+                Color pointColor = GetIntersectionColor(ip.Type);
+                int pointSize = Math.Max(4, (int)(8 / zoomFactor));
+
+                using (Brush brush = new SolidBrush(pointColor))
+                using (Pen pen = new Pen(Color.Black, 1))
+                {
+                    // Dessiner le point
+                    g.FillEllipse(brush, ip.Location.X - pointSize / 2, ip.Location.Y - pointSize / 2,
+                                 pointSize, pointSize);
+                    g.DrawEllipse(pen, ip.Location.X - pointSize / 2, ip.Location.Y - pointSize / 2,
+                                 pointSize, pointSize);
+                }
+
+                // Si c'est le point survolé ou sélectionné, le mettre en évidence
+                if ((hoveredIntersection.HasValue && hoveredIntersection.Value.ID == ip.ID) ||
+                    (selectedIntersection.HasValue && selectedIntersection.Value.ID == ip.ID))
+                {
+                    using (Pen highlightPen = new Pen(Color.Yellow, 2))
+                    {
+                        g.DrawEllipse(highlightPen, ip.Location.X - pointSize, ip.Location.Y - pointSize,
+                                     pointSize * 2, pointSize * 2);
+                    }
+
+                    // Afficher l'ID du point
+                    using (System.Drawing.Font font = new System.Drawing.Font("Arial", Math.Max(8, 10 / zoomFactor)))
+                    using (Brush textBrush = new SolidBrush(Color.White))
+                    using (Brush bgBrush = new SolidBrush(Color.FromArgb(200, Color.Black)))
+                    {
+                        string idText = $"P{ip.ID}";
+                        SizeF textSize = g.MeasureString(idText, font);
+
+                        RectangleF textRect = new RectangleF(
+                            ip.Location.X - textSize.Width / 2,
+                            ip.Location.Y - textSize.Height - pointSize - 5,
+                            textSize.Width + 4,
+                            textSize.Height);
+
+                        g.FillRectangle(bgBrush, textRect);
+                        g.DrawString(idText, font, textBrush,
+                            ip.Location.X - textSize.Width / 2 + 2,
+                            ip.Location.Y - textSize.Height - pointSize - 3);
+                    }
+                }
+
+                // AJOUTER CETTE PARTIE - Si c'est le point sélectionné, dessiner aussi les angles
+                if (selectedIntersection.HasValue && selectedIntersection.Value.ID == ip.ID)
+                {
+                    DrawIntersectionAngles(g, ip);
+                }
+            }
+        }
+        private Color GetIntersectionColor(IntersectionType type)
+        {
+            switch (type)
+            {
+                case IntersectionType.Exact: return Color.Red;
+                case IntersectionType.Proximity: return Color.Blue;
+                case IntersectionType.Terminal: return Color.Green;
+                default: return Color.Gray;
+            }
+        }
+
+        private void CheckProximityIntersections(Measurement line1, Measurement line2,
+                                                 Point line1Start, Point line1End,
+                                                 Point line2Start, Point line2End)
+        {
+            // Vérifier la proximité entre les extrémités
+            if (CalculateDistance(line1Start, line2Start) < intersectionTolerance)
+            {
+                AddIntersectionPoint(line1Start, line1.ID, line2.ID, IntersectionType.Proximity);
+            }
+            if (CalculateDistance(line1Start, line2End) < intersectionTolerance)
+            {
+                AddIntersectionPoint(line1Start, line1.ID, line2.ID, IntersectionType.Proximity);
+            }
+            if (CalculateDistance(line1End, line2Start) < intersectionTolerance)
+            {
+                AddIntersectionPoint(line1End, line1.ID, line2.ID, IntersectionType.Proximity);
+            }
+            if (CalculateDistance(line1End, line2End) < intersectionTolerance)
+            {
+                AddIntersectionPoint(line1End, line1.ID, line2.ID, IntersectionType.Proximity);
+            }
+        }
+
+        private void CheckTerminalIntersections(Measurement line1, Measurement line2,
+                                                Point line1Start, Point line1End,
+                                                Point line2Start, Point line2End)
+        {
+            // Vérifier les points terminaux communs exacts
+            if (line1Start == line2Start || line1Start == line2End)
+            {
+                AddIntersectionPoint(line1Start, line1.ID, line2.ID, IntersectionType.Terminal);
+            }
+            if (line1End == line2Start || line1End == line2End)
+            {
+                AddIntersectionPoint(line1End, line1.ID, line2.ID, IntersectionType.Terminal);
+            }
+        }
+
+        private void AddIntersectionPoint(Point location, int line1Id, int line2Id, IntersectionType type)
+        {
+            // Vérifier si un point d'intersection existe déjà à cet emplacement
+            var existing = intersectionPoints.FirstOrDefault(ip =>
+                CalculateDistance(ip.Location, location) < intersectionTolerance);
+
+            if (existing.ID == 0) // Nouveau point
+            {
+                IntersectionPoint newPoint = new IntersectionPoint(location, intersectionCounter++);
+                newPoint.Type = type;
+
+                if (!newPoint.LineIDs.Contains(line1Id))
+                    newPoint.LineIDs.Add(line1Id);
+                if (!newPoint.LineIDs.Contains(line2Id))
+                    newPoint.LineIDs.Add(line2Id);
+
+                intersectionPoints.Add(newPoint);
+            }
+            else // Point existant
+            {
+                int index = intersectionPoints.IndexOf(existing);
+                existing = intersectionPoints[index];
+
+                if (!existing.LineIDs.Contains(line1Id))
+                    existing.LineIDs.Add(line1Id);
+                if (!existing.LineIDs.Contains(line2Id))
+                    existing.LineIDs.Add(line2Id);
+
+                intersectionPoints[index] = existing;
+            }
+        }
+
+        ////
         private void DrawingPanel_Resize(object sender, EventArgs e)
         {
             drawingPanel.Invalidate();
@@ -381,18 +813,7 @@ namespace kinectProject
 
                 if (originalImage == null)
                 {
-                    // Draw placeholder text when no image is loaded
-                    string message = "No image loaded. Click 'Import Image' to begin.";
-                    using (System.Drawing.Font font = new System.Drawing.Font("Arial", 14, FontStyle.Bold))
-                    using (Brush brush = new SolidBrush(Color.White))
-                    {
-                        SizeF textSize = e.Graphics.MeasureString(message, font);
-                        PointF position = new PointF(
-                            (drawingPanel.Width - textSize.Width) / 2,
-                            (drawingPanel.Height - textSize.Height) / 2
-                        );
-                        e.Graphics.DrawString(message, font, brush, position);
-                    }
+                    // Draw placeholder text...
                     return;
                 }
 
@@ -414,20 +835,24 @@ namespace kinectProject
                     DrawMeasurement(e.Graphics, m);
                 }
 
+                // AUGMENTATION: Dessiner les points d'intersection
+                DrawIntersectionPoints(e.Graphics);
+
                 // Draw current tool preview
                 if (currentTool != ToolMode.None)
                 {
                     DrawCurrentToolPreview(e.Graphics);
                 }
 
-                // Reset transformation for UI elements that need screen coordinates
+                // Reset transformation for UI elements
                 e.Graphics.ResetTransform();
 
                 // Draw hover information
                 if (hoverPoint.HasValue && !string.IsNullOrEmpty(hoverMeasurementName))
                 {
                     PointF screenHoverPoint = TransformPointToScreen(hoverPoint.Value);
-                    DrawHoverLabel(e.Graphics, new Point((int)screenHoverPoint.X, (int)screenHoverPoint.Y), hoverMeasurementName);
+                    DrawHoverLabel(e.Graphics, new Point((int)screenHoverPoint.X, (int)screenHoverPoint.Y),
+                                 hoverMeasurementName);
                 }
 
                 // Draw zoom level
@@ -435,18 +860,10 @@ namespace kinectProject
             }
             catch (Exception ex)
             {
-                // Handle drawing errors gracefully
                 Debug.WriteLine($"Drawing error: {ex.Message}");
-
-                // Draw error message
-                using (System.Drawing.Font font = new System.Drawing.Font("Arial", 12))
-                using (Brush brush = new SolidBrush(Color.Red))
-                {
-                    e.Graphics.DrawString("Drawing error occurred", font, brush, 10, 10);
-                }
+                // Error handling...
             }
         }
-
         private void DrawCurrentToolPreview(Graphics g)
         {
             Point currentPos = drawingPanel.PointToClient(Cursor.Position);
@@ -1135,6 +1552,23 @@ namespace kinectProject
             PointF imagePointF = TransformPointToImage(e.Location);
             Point imagePoint = new Point((int)imagePointF.X, (int)imagePointF.Y);
 
+            // Détection des points d'intersection - Clic Droit
+            if (e.Button == MouseButtons.Right)
+            {
+                // Chercher un point d'intersection proche
+                var intersection = FindIntersectionAtPoint(imagePoint);
+
+                if (intersection.HasValue)
+                {
+                    selectedIntersection = intersection;
+                    ShowAngleContextMenu(e.Location, intersection.Value);
+                    return;
+                }
+            }
+
+
+        
+
             // FIX: Don't handle measurement creation if we're dragging grid
             if (isDraggingGrid) return;
 
@@ -1151,7 +1585,393 @@ namespace kinectProject
             }
         }
 
-    
+        private IntersectionPoint? FindIntersectionAtPoint(Point point)
+        {
+            foreach (var ip in intersectionPoints)
+            {
+                if (CalculateDistance(ip.Location, point) < intersectionTolerance)
+                {
+                    return ip;
+                }
+            }
+            return null;
+        }
+
+        private void ShowAngleContextMenu(Point screenLocation, IntersectionPoint intersection)
+        {
+            if (intersection.Equals(default(IntersectionPoint))) return;
+
+            ContextMenuStrip contextMenu = new ContextMenuStrip();
+            contextMenu.BackColor = Color.FromArgb(62, 62, 64);
+            contextMenu.ForeColor = Color.White;
+            contextMenu.Renderer = new CustomToolStripRenderer();
+
+            // Titre
+            ToolStripMenuItem titleItem = new ToolStripMenuItem(
+                $"📐 Point P{intersection.ID} - {intersection.LineIDs.Count} lines");
+            titleItem.Enabled = false;
+            titleItem.Font = new System.Drawing.Font("Arial", 9, FontStyle.Bold);
+            contextMenu.Items.Add(titleItem);
+
+            contextMenu.Items.Add(new ToolStripSeparator());
+
+            // Grouper les angles par paires de lignes
+            var angleGroups = intersection.Angles
+                .GroupBy(a => new { Line1 = Math.Min(a.Item1, a.Item2), Line2 = Math.Max(a.Item1, a.Item2) })
+                .Select(g => new
+                {
+                    Line1 = g.Key.Line1,
+                    Line2 = g.Key.Line2,
+                    Angles = g.Select(x => x.Item3).Distinct().OrderBy(a => a).ToList()
+                })
+                .ToList();
+
+            if (angleGroups.Count == 0)
+            {
+                ToolStripMenuItem noAnglesItem = new ToolStripMenuItem("No angles detected");
+                noAnglesItem.Enabled = false;
+                contextMenu.Items.Add(noAnglesItem);
+            }
+            else
+            {
+                foreach (var group in angleGroups)
+                {
+                    if (group.Angles.Count == 2)
+                    {
+                        string angleText = $"∠(L{group.Line1}-L{group.Line2}): {group.Angles[0]:F1}° & {group.Angles[1]:F1}°";
+                        ToolStripMenuItem angleItem = new ToolStripMenuItem(angleText);
+
+                        //// Sous-menu avec détails
+                        //angleItem.DropDownItems.Add($"Acute angle: {group.Angles[0]:F1}°");
+                        //angleItem.DropDownItems.Add($"Obtuse angle: {group.Angles[1]:F1}°");
+                        //angleItem.DropDownItems.Add($"Sum: {(group.Angles[0] + group.Angles[1]):F1}°");
+                        //angleItem.DropDownItems.Add($"Difference: {Math.Abs(group.Angles[1] - group.Angles[0]):F1}°");
+
+                        contextMenu.Items.Add(angleItem);
+                    }
+                    else if (group.Angles.Count == 1)
+                    {
+                        // Cas particulier (angle droit = 90°)
+                        string angleText = $"∠(L{group.Line1}-L{group.Line2}) = {group.Angles[0]:F1}°";
+                        if (Math.Abs(group.Angles[0] - 90) < 0.1)
+                        {
+                            angleText += " (Right angle)";
+                        }
+                        contextMenu.Items.Add(new ToolStripMenuItem(angleText));
+                    }
+                }
+            }
+
+            contextMenu.Items.Add(new ToolStripSeparator());
+
+            //// Calculer les statistiques avec plus de précision
+            //if (intersection.Angles.Count > 0)
+            //{
+            //    var allAngles = intersection.Angles.Select(a => a.Item3).Distinct().OrderBy(a => a).ToList();
+
+            //    StringBuilder statsText = new StringBuilder();
+            //    statsText.AppendLine($"Total angles: {allAngles.Count}");
+            //    statsText.AppendLine($"Acute angles: {allAngles.Where(a => a < 90).Count()}");
+            //    statsText.AppendLine($"Right angles: {allAngles.Where(a => Math.Abs(a - 90) < 0.5).Count()}");
+            //    statsText.AppendLine($"Obtuse angles: {allAngles.Where(a => a > 90).Count()}");
+
+            //    if (allAngles.Count > 0)
+            //    {
+            //        statsText.AppendLine($"Min: {allAngles.Min():F2}°");
+            //        statsText.AppendLine($"Max: {allAngles.Max():F2}°");
+            //        statsText.AppendLine($"Avg: {allAngles.Average():F2}°");
+            //    }
+
+            //    ToolStripMenuItem statsItem = new ToolStripMenuItem("📊 Statistics");
+            //    statsItem.DropDownItems.Add(statsText.ToString());
+            //    contextMenu.Items.Add(statsItem);
+
+            //    contextMenu.Items.Add(new ToolStripSeparator());
+            //}
+
+            // Boutons d'action
+            ToolStripMenuItem copyItem = new ToolStripMenuItem("📋 Copy All Data");
+            copyItem.Click += (s, ev) => CopyAnglesToClipboard(intersection);
+            contextMenu.Items.Add(copyItem);
+
+            ToolStripMenuItem clearItem = new ToolStripMenuItem("❌ Clear Selection");
+            clearItem.Click += (s, ev) => { selectedIntersection = default(IntersectionPoint); drawingPanel.Invalidate(); };
+            contextMenu.Items.Add(clearItem);
+
+            // Afficher le menu
+            contextMenu.Show(drawingPanel, screenLocation);
+        }
+        private void CopyAnglesToClipboard(IntersectionPoint intersection)
+        {
+            if (intersection.Angles.Count == 0)
+            {
+                Clipboard.SetText("No angles at this intersection");
+                return;
+            }
+
+            StringBuilder sb = new StringBuilder();
+            sb.AppendLine($"=== INTERSECTION POINT P{intersection.ID} ===");
+            sb.AppendLine($"Type: {intersection.Type}");
+            sb.AppendLine($"Coordinates: ({intersection.Location.X}, {intersection.Location.Y})");
+            sb.AppendLine($"Lines involved: {string.Join(", ", intersection.LineIDs.Select(id => $"L{id}"))}");
+            sb.AppendLine();
+            sb.AppendLine("ANGLES:");
+            sb.AppendLine("-------");
+
+            // Grouper les angles par paires de lignes
+            var angleGroups = intersection.Angles
+                .GroupBy(a => new { Line1 = Math.Min(a.Item1, a.Item2), Line2 = Math.Max(a.Item1, a.Item2) })
+                .Select(g => new
+                {
+                    Line1 = g.Key.Line1,
+                    Line2 = g.Key.Line2,
+                    Angles = g.Select(x => x.Item3).Distinct().OrderBy(a => a).ToList()
+                })
+                .OrderBy(g => g.Line1).ThenBy(g => g.Line2);
+
+            foreach (var group in angleGroups)
+            {
+                sb.AppendLine($"Between L{group.Line1} and L{group.Line2}:");
+
+                if (group.Angles.Count == 2)
+                {
+                    sb.AppendLine($"  • Acute angle: {group.Angles[0]:F2}°");
+                    sb.AppendLine($"  • Obtuse angle: {group.Angles[1]:F2}°");
+                    sb.AppendLine($"  • Sum: {(group.Angles[0] + group.Angles[1]):F2}°");
+                    sb.AppendLine($"  • Acute/Obtuse ratio: {group.Angles[0] / group.Angles[1]:F3}");
+                }
+                else if (group.Angles.Count == 1)
+                {
+                    sb.AppendLine($"  • Angle: {group.Angles[0]:F2}°");
+                    if (Math.Abs(group.Angles[0] - 90) < 0.1)
+                        sb.AppendLine("    → RIGHT ANGLE (90°)");
+                }
+                sb.AppendLine();
+            }
+
+            // Statistiques
+            var allAngles = intersection.Angles.Select(a => a.Item3).Distinct().ToList();
+            sb.AppendLine("STATISTICS:");
+            sb.AppendLine("-----------");
+            sb.AppendLine($"Total distinct angles: {allAngles.Count}");
+            sb.AppendLine($"Acute angles (<90°): {allAngles.Where(a => a < 90).Count()}");
+            sb.AppendLine($"Right angles (≈90°): {allAngles.Where(a => Math.Abs(a - 90) < 0.5).Count()}");
+            sb.AppendLine($"Obtuse angles (>90°): {allAngles.Where(a => a > 90).Count()}");
+
+            if (allAngles.Count > 0)
+            {
+                sb.AppendLine($"Minimum: {allAngles.Min():F2}°");
+                sb.AppendLine($"Maximum: {allAngles.Max():F2}°");
+                sb.AppendLine($"Average: {allAngles.Average():F2}°");
+                sb.AppendLine($"Median: {CalculateMedian(allAngles):F2}°");
+            }
+
+            // Détecter les angles spéciaux
+            sb.AppendLine();
+            sb.AppendLine("SPECIAL ANGLES:");
+            sb.AppendLine("---------------");
+
+            foreach (var angle in allAngles.OrderBy(a => a))
+            {
+                string special = "";
+                if (Math.Abs(angle - 30) < 0.5) special = " (Common: 30°)";
+                else if (Math.Abs(angle - 45) < 0.5) special = " (Half right: 45°)";
+                else if (Math.Abs(angle - 60) < 0.5) special = " (Common: 60°)";
+                else if (Math.Abs(angle - 90) < 0.5) special = " (Right angle: 90°)";
+                else if (Math.Abs(angle - 120) < 0.5) special = " (Supplementary to 60°)";
+                else if (Math.Abs(angle - 135) < 0.5) special = " (Supplementary to 45°)";
+                else if (Math.Abs(angle - 150) < 0.5) special = " (Supplementary to 30°)";
+
+                sb.AppendLine($"{angle:F2}°{special}");
+            }
+
+            Clipboard.SetText(sb.ToString());
+            UpdateStatus($"All angles at point P{intersection.ID} copied to clipboard");
+        }
+
+        // Méthode utilitaire pour calculer la médiane
+        private double CalculateMedian(List<double> values)
+        {
+            var sorted = values.OrderBy(v => v).ToList();
+            int count = sorted.Count;
+
+            if (count == 0) return 0;
+            if (count % 2 == 0)
+                return (sorted[count / 2 - 1] + sorted[count / 2]) / 2.0;
+            else
+                return sorted[count / 2];
+        }
+        private void DrawIntersectionAngles(Graphics g, IntersectionPoint ip)
+        {
+            if (ip.LineIDs.Count < 2 || ip.Angles.Count == 0) return;
+
+            // Get angle pair for display
+            var anglePair = ip.Angles
+                .GroupBy(a => new { L1 = Math.Min(a.Item1, a.Item2), L2 = Math.Max(a.Item1, a.Item2) })
+                .Select(gg => gg.Select(x => x.Item3).Distinct().OrderBy(a => a).ToList())
+                .FirstOrDefault(a => a.Count >= 2);
+
+            if (anglePair == null || anglePair.Count < 2) return;
+
+            double acuteAngle = anglePair[0];
+            double obtuseAngle = anglePair[1];
+
+            // Get the two intersecting lines
+            var lines = measurements.Where(m => ip.LineIDs.Contains(m.ID)).Take(2).ToList();
+            if (lines.Count < 2) return;
+
+            // Calculate the actual line angles from intersection point
+            double[] lineAngles = new double[2];
+            for (int i = 0; i < 2; i++)
+            {
+                Point start = lines[i].Type == MeasurementType.Angle && lines[i].Vertex.HasValue ?
+                             lines[i].Vertex.Value : lines[i].Start;
+                Point end = lines[i].End;
+
+                // Calculate angle from intersection point to line end
+                double dx = end.X - ip.Location.X;
+                double dy = end.Y - ip.Location.Y;
+
+                // If intersection is closer to start, flip direction
+                double distToStart = Math.Sqrt(Math.Pow(start.X - ip.Location.X, 2) +
+                                               Math.Pow(start.Y - ip.Location.Y, 2));
+                double distToEnd = Math.Sqrt(Math.Pow(end.X - ip.Location.X, 2) +
+                                             Math.Pow(end.Y - ip.Location.Y, 2));
+
+                if (distToStart > distToEnd)
+                {
+                    dx = start.X - ip.Location.X;
+                    dy = start.Y - ip.Location.Y;
+                }
+
+                lineAngles[i] = Math.Atan2(dy, dx) * (180 / Math.PI);
+                if (lineAngles[i] < 0) lineAngles[i] += 360;
+            }
+
+            // Normalize angles to find the acute angle region
+            double angle1 = lineAngles[0];
+            double angle2 = lineAngles[1];
+
+            // Calculate angular difference
+            double diff = Math.Abs(angle2 - angle1);
+            if (diff > 180) diff = 360 - diff;
+
+            // Determine which is the smaller angle region
+            double acuteStartAngle, obtuseStartAngle;
+
+            if (diff < 180)
+            {
+                // Acute angle is between the two lines
+                acuteStartAngle = Math.Min(angle1, angle2);
+                if (Math.Abs(angle2 - angle1) > 180)
+                {
+                    acuteStartAngle = Math.Max(angle1, angle2);
+                }
+                obtuseStartAngle = acuteStartAngle + acuteAngle;
+            }
+            else
+            {
+                // Lines are more than 180° apart
+                acuteStartAngle = Math.Max(angle1, angle2);
+                obtuseStartAngle = Math.Min(angle1, angle2);
+            }
+
+            // Normalize to 0-360
+            while (acuteStartAngle < 0) acuteStartAngle += 360;
+            while (acuteStartAngle >= 360) acuteStartAngle -= 360;
+            while (obtuseStartAngle < 0) obtuseStartAngle += 360;
+            while (obtuseStartAngle >= 360) obtuseStartAngle -= 360;
+
+            // Arc radii
+            float acuteRadius = 28f;
+            float obtuseRadius = 36f;
+
+            using (System.Drawing.Font angleFont = new System.Drawing.Font("Arial", Math.Max(9, 11 / zoomFactor), FontStyle.Bold))
+            using (Brush textBrush = new SolidBrush(Color.White))
+            using (Brush bgBrush = new SolidBrush(Color.FromArgb(220, 20, 20, 20)))
+            {
+                // --- ACUTE ANGLE ARC ---
+                using (Pen acutePen = new Pen(Color.Cyan, 1.5f))
+                {
+                    RectangleF acuteRect = new RectangleF(
+                        ip.Location.X - acuteRadius,
+                        ip.Location.Y - acuteRadius,
+                        acuteRadius * 2,
+                        acuteRadius * 2);
+
+                    g.DrawArc(acutePen, acuteRect, (float)acuteStartAngle, (float)acuteAngle);
+
+                    // Position text at the middle of the arc
+                    double acuteMidAngle = (acuteStartAngle + acuteAngle / 2) * Math.PI / 180;
+                    PointF acuteTextPos = new PointF(
+                        ip.Location.X + (float)(acuteRadius * 1.4 * Math.Cos(acuteMidAngle)),
+                        ip.Location.Y + (float)(acuteRadius * 1.4 * Math.Sin(acuteMidAngle))
+                    );
+
+                    string acuteText = $"{acuteAngle:F1}°";
+                    SizeF acuteTextSize = g.MeasureString(acuteText, angleFont);
+
+                    RectangleF acuteTextRect = new RectangleF(
+                        acuteTextPos.X - acuteTextSize.Width / 2,
+                        acuteTextPos.Y - acuteTextSize.Height / 2,
+                        acuteTextSize.Width + 6,
+                        acuteTextSize.Height + 2);
+
+                    g.FillRectangle(bgBrush, acuteTextRect);
+                    g.DrawString(acuteText, angleFont, textBrush,
+                        acuteTextRect.X + 3,
+                        acuteTextRect.Y + 1);
+                }
+
+                // --- OBTUSE ANGLE ARC ---
+                using (Pen obtusePen = new Pen(Color.Magenta, 1.5f))
+                {
+                    RectangleF obtuseRect = new RectangleF(
+                        ip.Location.X - obtuseRadius,
+                        ip.Location.Y - obtuseRadius,
+                        obtuseRadius * 2,
+                        obtuseRadius * 2);
+
+                    g.DrawArc(obtusePen, obtuseRect, (float)obtuseStartAngle, (float)obtuseAngle);
+
+                    // Position text at the middle of the arc
+                    double obtuseMidAngle = (obtuseStartAngle + obtuseAngle / 2) * Math.PI / 180;
+                    PointF obtuseTextPos = new PointF(
+                        ip.Location.X + (float)(obtuseRadius * 1.4 * Math.Cos(obtuseMidAngle)),
+                        ip.Location.Y + (float)(obtuseRadius * 1.4 * Math.Sin(obtuseMidAngle))
+                    );
+
+                    string obtuseText = $"{obtuseAngle:F1}°";
+                    SizeF obtuseTextSize = g.MeasureString(obtuseText, angleFont);
+
+                    RectangleF obtuseTextRect = new RectangleF(
+                        obtuseTextPos.X - obtuseTextSize.Width / 2,
+                        obtuseTextPos.Y - obtuseTextSize.Height / 2,
+                        obtuseTextSize.Width + 6,
+                        obtuseTextSize.Height + 2);
+
+                    g.FillRectangle(bgBrush, obtuseTextRect);
+                    g.DrawString(obtuseText, angleFont, textBrush,
+                        obtuseTextRect.X + 3,
+                        obtuseTextRect.Y + 1);
+                }
+
+                // --- INTERSECTION POINT LABEL ---
+                using (System.Drawing.Font pointFont = new System.Drawing.Font("Arial", Math.Max(8, 10 / zoomFactor), FontStyle.Bold))
+                {
+                    string pointLabel = $"P{ip.ID}";
+                    SizeF pointLabelSize = g.MeasureString(pointLabel, pointFont);
+
+                    // Position label offset from the intersection
+                    PointF pointLabelPos = new PointF(
+                        ip.Location.X - pointLabelSize.Width / 2,
+                        ip.Location.Y - Math.Max(acuteRadius, obtuseRadius) - 18
+                    );
+
+                    g.DrawString(pointLabel, pointFont, textBrush, pointLabelPos);
+                }
+            }
+        }
 
         private void DrawingPanel_MouseLeave(object sender, EventArgs e)
         {
@@ -1271,6 +2091,9 @@ namespace kinectProject
                         newMeasurement.Name = measurementName;
 
                         measurements.Add(newMeasurement);
+
+                        FindAllIntersections();
+
                         currentStartPoint = null;
                         UpdateMeasurementsList();
                         drawingPanel.Invalidate();
@@ -1612,6 +2435,9 @@ namespace kinectProject
                 if (currentEditMode == EditMode.Delete)
                 {
                     measurements.RemoveAt(index);
+
+                    FindAllIntersections();
+
                     UpdateMeasurementsList();
                     drawingPanel.Invalidate();
                     UpdateStatus("Measurement deleted");
@@ -1629,6 +2455,7 @@ namespace kinectProject
                 drawingPanel.Invalidate();
             }
         }
+
 
 
         private Point CalculatePerpendicularFoot(Measurement baseLine, Point point)
@@ -1880,6 +2707,34 @@ namespace kinectProject
 
         private void UpdateHoverInfo(Point imagePoint)
         {
+            // D'abord vérifier les intersections
+            var intersection = FindIntersectionAtPoint(imagePoint);
+            if (intersection.HasValue)
+            {
+                hoveredIntersection = intersection;
+                hoverPoint = intersection.Value.Location;
+
+                // Créer le texte d'info-bulle
+                StringBuilder sb = new StringBuilder();
+                sb.AppendLine($"Point P{intersection.Value.ID} ({intersection.Value.Type})");
+                sb.AppendLine($"Lines: {string.Join(", ", intersection.Value.LineIDs.Select(id => $"L{id}"))}");
+
+                if (intersection.Value.Angles.Count > 0)
+                {
+                    sb.AppendLine("Angles:");
+                    foreach (var angle in intersection.Value.Angles)
+                    {
+                        sb.AppendLine($"  L{angle.Item1}-L{angle.Item2}: {angle.Item3:F1}°");
+                    }
+                }
+
+                hoverMeasurementName = sb.ToString();
+                hoverMeasurement = null;
+                return;
+            }
+
+            // Si pas d'intersection, vérifier les mesures normales
+            hoveredIntersection = null;
             int index = FindMeasurementAtPoint(imagePoint);
             if (index >= 0)
             {
@@ -1894,7 +2749,6 @@ namespace kinectProject
                 hoverMeasurement = null;
             }
         }
-
         private Point GetHoverPointForMeasurement(Measurement m, Point mouseLocation)
         {
             switch (m.Type)
@@ -2065,6 +2919,14 @@ namespace kinectProject
             isReferenceSet = false;
             pixelToRealRatio = 1.0f;
             isSettingReference = false;
+      
+
+            // AUGMENTATION: Effacer aussi les intersections
+            intersectionPoints.Clear();
+            intersectionCounter = 1;
+            selectedIntersection = null;
+            hoveredIntersection = null;
+
             UpdateStatus("All measurements cleared.");
             drawingPanel.Invalidate();
         }
@@ -2707,6 +3569,8 @@ namespace kinectProject
             }
         }
     }
+
+
 
     public class RenameDialog : Form
     {
