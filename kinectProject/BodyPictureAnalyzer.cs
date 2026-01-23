@@ -2,12 +2,16 @@
 using iTextSharp.text.pdf;
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
+using System.Drawing.Imaging;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Text;
+using System.Threading;
 using System.Windows.Forms;
 
 namespace kinectProject
@@ -15,6 +19,49 @@ namespace kinectProject
     public partial class BodyPictureAnalyzer : Form
     {
         // Enums
+
+        ////////////////////////////////
+
+        // Add to enums section
+        private enum DetectionMode { None, SinglePoint, MultiplePoints, BodyContour }
+        public enum PointColor { Red, Green, Blue, Yellow, White, Custom }
+
+        // Add after other structures
+        private struct DetectedPoint
+        {
+            public Point Location;
+            public PointColor Color;
+            public double Confidence;
+            public int Radius;
+            public int ID;
+
+            public DetectedPoint(Point location, PointColor color, double confidence, int radius, int id)
+            {
+                Location = location;
+                Color = color;
+                Confidence = confidence;
+                Radius = radius;
+                ID = id;
+            }
+        }
+
+        private struct BodyLandmark
+        {
+            public string Name;
+            public Point Location;
+            public List<string> ConnectedTo;
+
+            public BodyLandmark(string name, Point location)
+            {
+                Name = name;
+                Location = location;
+                ConnectedTo = new List<string>();
+            }
+        }
+
+
+
+        ////////////////////////////////
         private enum ToolMode { None, Line, Point, Angle, AngleWithAxis, Distance, Reference, Perpendicular }
         private enum EditMode { None, Move, Delete, Rename, Normal }
         private enum AxisType { X, Y }
@@ -31,6 +78,9 @@ namespace kinectProject
             public Point? Vertex;
             public int ID;
 
+            public double? AngleValue; // For storing the angle in degrees
+            public List<int> RelatedLineIDs; // IDs of lines that form this angle
+
             public Measurement(Point start, Point end, string name, MeasurementType type, int id)
             {
                 Start = start;
@@ -41,8 +91,22 @@ namespace kinectProject
                 Axis = null;
                 Vertex = null;
                 ID = id;
+                AngleValue = null;
+                RelatedLineIDs = new List<int>();
             }
-        }
+            public static Measurement CreateIntersectionAngle(string name, int id, Point vertex,
+                                                 double angleValue, int line1Id, int line2Id)
+            {
+                var measurement = new Measurement(vertex, vertex, name, MeasurementType.Angle, id);
+                measurement.Vertex = vertex;
+                measurement.AngleValue = angleValue;
+                measurement.RelatedLineIDs.Add(line1Id);
+                measurement.RelatedLineIDs.Add(line2Id);
+                return measurement;
+            }
+        
+
+    }
 
         private enum MeasurementType { Line, Point, Angle, AngleWithAxis, Distance, ReferenceLine, PerpendicularLine, None }
 
@@ -76,6 +140,30 @@ namespace kinectProject
         private const int intersectionTolerance = 10; // pixels
 
         // Application state
+
+
+        /// /////////////////////////////////////////////
+
+        // Add to Application state section
+        private DetectionMode currentDetectionMode = DetectionMode.None;
+        private List<DetectedPoint> detectedPoints = new List<DetectedPoint>();
+        private List<BodyLandmark> bodyLandmarks = new List<BodyLandmark>();
+        private int detectionTolerance = 30; // Color tolerance
+        private bool showDetectionPreview = true;
+        private Bitmap processedImage;
+        private Dictionary<PointColor, Color> colorMap = new Dictionary<PointColor, Color>()
+{
+    { PointColor.Red, Color.Red },
+    { PointColor.Green, Color.Green },
+    { PointColor.Blue, Color.Blue },
+    { PointColor.Yellow, Color.Yellow },
+    { PointColor.White, Color.White }
+};
+        private PointColor selectedColor = PointColor.Red;
+        private Color customColor = Color.Red;
+        private int minPointSize = 5;
+        private int maxPointSize = 30;
+        ////////////////////////////////
         private ToolMode currentTool = ToolMode.None;
         private EditMode currentEditMode = EditMode.Normal;
         private List<Measurement> measurements = new List<Measurement>();
@@ -179,6 +267,8 @@ namespace kinectProject
             AddToolButton("🔲 Toggle Grid", BtnToggleGrid_Click);
             AddToolButton("📄 Export PDF", (s, e) => ExportToPdf());
 
+            AddToolButton("🔴 Simple Test", (s, e) => SimpleDetectionTest());
+
             // Zoom controls
             AddToolSeparator();
             AddToolButton("🔍 Zoom In", BtnZoomIn_Click);
@@ -189,6 +279,12 @@ namespace kinectProject
 
             // Auto-rename button - AJOUTEZ-LE ICI, APRÈS LA CRÉATION DU TOOLSTRIP
             AddToolButton("🏷️ Auto-Rename", BtnToggleAutoRename_Click);
+
+            // In SetupUI method, add these buttons after existing ones
+            AddToolSeparator();
+            AddToolButton("🎯 Detect Points", BtnDetectPoints_Click);
+
+
 
             // Drawing panel - Using DoubleBufferedPanel for smooth zoom
             drawingPanel = new DoubleBufferedPanel();
@@ -259,6 +355,1486 @@ namespace kinectProject
             UpdateStatus($"Auto-rename: {(autoRenameEnabled ? "Enabled" : "Disabled")}");
         }
 
+
+        ////
+
+        private void SimpleDetectionTest()
+        {
+            if (originalImage == null) return;
+
+            detectedPoints.Clear();
+
+            // Just detect bright red pixels
+            Bitmap bmp = new Bitmap(originalImage);
+
+            for (int x = 0; x < bmp.Width; x += 5) // Sample every 5 pixels
+            {
+                for (int y = 0; y < bmp.Height; y += 5)
+                {
+                    Color pixel = bmp.GetPixel(x, y);
+
+                    // Simple red detection: R > 200, G < 100, B < 100
+                    if (pixel.R > 200 && pixel.G < 100 && pixel.B < 100)
+                    {
+                        detectedPoints.Add(new DetectedPoint(
+                            new Point(x, y),
+                            PointColor.Red,
+                            1.0,
+                            10,
+                            detectedPoints.Count + 1));
+                    }
+                }
+            }
+
+            bmp.Dispose();
+
+            MessageBox.Show($"Simple detection found {detectedPoints.Count} red pixels");
+            CreateMeasurementsFromDetectedPoints();
+            drawingPanel.Invalidate();
+        }
+
+
+        // // // // // // // // //
+
+
+        private void DetectColoredPoints()
+        {
+            if (originalImage == null) return;
+
+            detectedPoints.Clear();
+
+            // REINITIALISER les paramètres pour les autocollants
+            int toleranceToUse = 15; // Très strict : 15%
+            int minSizeToUse = 50;   // Les autocollants sont plus grands
+            int maxSizeToUse = 500;  // Maximum raisonnable
+
+            using (Bitmap bmp = new Bitmap(originalImage))
+            {
+                int width = bmp.Width;
+                int height = bmp.Height;
+
+                // Créer une image de débogage
+                Bitmap debug = new Bitmap(width, height);
+
+                // ---- ÉTAPE 1: Détection STRICTE du rouge vif #e32e2c ----
+                bool[,] strictMask = new bool[height, width];
+
+                // Valeurs exactes du rouge autocollant
+                int stickerR = 227;  // Rouge vif
+                int stickerG = 46;   // Vert très faible
+                int stickerB = 44;   // Bleu très faible
+
+                // Tolérance TRÈS serrée
+                int tolerance = (int)(toleranceToUse * 2.55); // 15% -> ~38 unités
+
+                int redPoints = 0;
+
+                for (int y = 0; y < height; y++)
+                {
+                    for (int x = 0; x < width; x++)
+                    {
+                        Color pixel = bmp.GetPixel(x, y);
+
+                        // CRITÈRES STRICTS pour les autocollants :
+                        // 1. Rouge DOMINANT (R > G + 100 ET R > B + 100)
+                        bool redDominant = (pixel.R > pixel.G + 100) && (pixel.R > pixel.B + 100);
+
+                        // 2. Vert et Bleu TRÈS FAIBLES (pour éviter la peau)
+                        bool lowGreenBlue = (pixel.G < 80) && (pixel.B < 80);
+
+                        // 3. Rouge SATURÉ (pas de gris/rose)
+                        bool saturated = (pixel.R - Math.Min(pixel.G, pixel.B)) > 150;
+
+                        // 4. Proche de #e32e2c spécifiquement
+                        double distanceToSticker = Math.Sqrt(
+                            Math.Pow(pixel.R - stickerR, 2) +
+                            Math.Pow(pixel.G - stickerG, 2) +
+                            Math.Pow(pixel.B - stickerB, 2));
+
+                        bool closeToStickerColor = distanceToSticker < tolerance;
+
+                        // TOUS les critères doivent être vrais
+                        strictMask[y, x] = redDominant && lowGreenBlue && saturated && closeToStickerColor;
+
+                        // Pour débogage : colorier les pixels détectés
+                        if (strictMask[y, x])
+                        {
+                            debug.SetPixel(x, y, Color.Red);
+                            redPoints++;
+                        }
+                        else
+                        {
+                            debug.SetPixel(x, y, Color.FromArgb(
+                                pixel.R / 4,  // Assombrir pour mieux voir
+                                pixel.G / 4,
+                                pixel.B / 4));
+                        }
+                    }
+                }
+
+                // ---- ÉTAPE 2: Regroupement en blobs ----
+                List<ConnectedComponent> stickers = FindStickers(strictMask, width, height);
+
+                MessageBox.Show($"Pixels rouges stricts: {redPoints}\nBlobs potentiels: {stickers.Count}",
+                               "Debug - Étape 1");
+
+                // ---- ÉTAPE 3: Filtrer les vrais autocollants ----
+                int id = 1;
+                foreach (var sticker in stickers)
+                {
+                    // Critères pour un autocollant :
+                    // 1. Taille appropriée
+                    if (sticker.PixelCount < minSizeToUse || sticker.PixelCount > maxSizeToUse)
+                        continue;
+
+                    // 2. Forme relativement circulaire
+                    double circularity = CalculateCircularity(sticker);
+                    if (circularity < 0.5) // Doit être assez rond
+                        continue;
+
+                    // 3. Couleur moyenne très rouge
+                    Color avgColor = CalculateAverageColor(sticker, bmp);
+                    if (!IsStickerRed(avgColor))
+                        continue;
+
+                    // 4. Pas de "trous" (autocollant solide)
+                    if (HasHoles(sticker, strictMask))
+                        continue;
+
+                    // C'EST UN VRAI AUTOCOLLANT !
+                    Point center = new Point(
+                        (sticker.MinX + sticker.MaxX) / 2,
+                        (sticker.MinY + sticker.MaxY) / 2
+                    );
+
+                    detectedPoints.Add(new DetectedPoint(
+                        center,
+                        selectedColor,
+                        1.0, // Haute confiance
+                        (int)Math.Sqrt(sticker.PixelCount / Math.PI),
+                        id++
+                    ));
+
+                    // Dessiner sur l'image debug
+                    DrawStickerMarker(debug, sticker, id);
+                }
+
+                // Sauvegarder et montrer
+                debug.Save("strict_sticker_detection.png");
+
+                MessageBox.Show($"Autocollants détectés: {detectedPoints.Count}\n" +
+                               $"Image sauvegardée: strict_sticker_detection.png",
+                               "Résultat final");
+
+                debug.Dispose();
+            }
+
+            drawingPanel.Invalidate();
+        }
+
+        // ---- FONCTIONS AUXILIAIRES ----
+
+        private List<ConnectedComponent> FindStickers(bool[,] mask, int width, int height)
+        {
+            List<ConnectedComponent> components = new List<ConnectedComponent>();
+            bool[,] visited = new bool[height, width];
+
+            for (int y = 0; y < height; y++)
+            {
+                for (int x = 0; x < width; x++)
+                {
+                    if (mask[y, x] && !visited[y, x])
+                    {
+                        ConnectedComponent comp = new ConnectedComponent();
+                        Stack<Point> stack = new Stack<Point>();
+                        stack.Push(new Point(x, y));
+
+                        while (stack.Count > 0)
+                        {
+                            Point p = stack.Pop();
+
+                            if (p.X < 0 || p.X >= width || p.Y < 0 || p.Y >= height ||
+                                visited[p.Y, p.X] || !mask[p.Y, p.X])
+                                continue;
+
+                            visited[p.Y, p.X] = true;
+                            comp.Add(p.X, p.Y);
+
+                            // 8-connexité pour mieux regrouper
+                            for (int dy = -1; dy <= 1; dy++)
+                            {
+                                for (int dx = -1; dx <= 1; dx++)
+                                {
+                                    if (dx == 0 && dy == 0) continue;
+                                    stack.Push(new Point(p.X + dx, p.Y + dy));
+                                }
+                            }
+                        }
+
+                        if (comp.PixelCount >= 10) // Ignorer les très petits groupes
+                        {
+                            components.Add(comp);
+                        }
+                    }
+                }
+            }
+
+            return components;
+        }
+
+        private double CalculateCircularity(ConnectedComponent comp)
+        {
+            double area = comp.PixelCount;
+            double perimeter = 2 * (comp.Width + comp.Height); // Estimation simple
+
+            if (perimeter == 0) return 0;
+
+            return (4 * Math.PI * area) / (perimeter * perimeter);
+        }
+
+        private Color CalculateAverageColor(ConnectedComponent comp, Bitmap image)
+        {
+            long totalR = 0, totalG = 0, totalB = 0;
+
+            foreach (var p in comp.Pixels)
+            {
+                Color pixel = image.GetPixel(p.X, p.Y);
+                totalR += pixel.R;
+                totalG += pixel.G;
+                totalB += pixel.B;
+            }
+
+            int count = comp.PixelCount;
+            return Color.FromArgb(
+                (int)(totalR / count),
+                (int)(totalG / count),
+                (int)(totalB / count));
+        }
+
+        private bool IsStickerRed(Color color)
+        {
+            // Un autocollant doit avoir :
+            // R > 180 (très rouge)
+            // G < 100 (peu de vert)
+            // B < 100 (peu de bleu)
+            // R > G + 80 (rouge dominant)
+            // R > B + 80 (rouge dominant)
+
+            return color.R > 180 &&
+                   color.G < 100 &&
+                   color.B < 100 &&
+                   color.R > color.G + 80 &&
+                   color.R > color.B + 80;
+        }
+
+        private bool HasHoles(ConnectedComponent comp, bool[,] mask)
+        {
+            // Vérifie si le composant a des "trous" (pixels non-rouges à l'intérieur)
+            // Les autocollants sont généralement solides
+
+            int holePixels = 0;
+            int totalPixelsInBbox = 0;
+
+            for (int y = comp.MinY + 1; y < comp.MaxY; y++)
+            {
+                for (int x = comp.MinX + 1; x < comp.MaxX; x++)
+                {
+                    totalPixelsInBbox++;
+
+                    // Si c'est dans le rectangle mais pas dans le masque, c'est un trou
+                    if (!mask[y, x])
+                    {
+                        holePixels++;
+                    }
+                }
+            }
+
+            // Si plus de 20% de trous, c'est probablement pas un autocollant
+            return totalPixelsInBbox > 0 && ((double)holePixels / totalPixelsInBbox) > 0.2;
+        }
+
+        private void DrawStickerMarker(Bitmap debug, ConnectedComponent sticker, int id)
+        {
+            using (Graphics g = Graphics.FromImage(debug))
+            {
+                // Dessiner un cercle vert autour de l'autocollant
+                g.DrawEllipse(Pens.Lime,
+                    sticker.MinX, sticker.MinY,
+                    sticker.Width, sticker.Height);
+
+                // Dessiner le centre
+                Point center = new Point(
+                    (sticker.MinX + sticker.MaxX) / 2,
+                    (sticker.MinY + sticker.MaxY) / 2);
+
+                g.FillEllipse(Brushes.Cyan, center.X - 3, center.Y - 3, 6, 6);
+
+                // Ajouter un numéro
+                g.DrawString(id.ToString(),
+                    new System.Drawing.Font("Arial", 10, FontStyle.Bold),
+                    Brushes.Yellow,
+                    center.X + 5, center.Y - 10);
+            }
+        }
+
+
+
+
+  
+    
+
+        // //  // // // // //
+        private void BtnDetectPoints_Click(object sender, EventArgs e)
+        {
+            if (originalImage == null)
+            {
+                MessageBox.Show("Please load an image first.", "No Image",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            using (var detectionDialog = new DetectionSettingsDialog(
+                selectedColor, customColor, detectionTolerance, minPointSize, maxPointSize))
+            {
+                if (detectionDialog.ShowDialog() == DialogResult.OK)
+                {
+                    selectedColor = detectionDialog.SelectedColor;
+                    customColor = detectionDialog.CustomColor;
+                    detectionTolerance = detectionDialog.Tolerance;
+                    minPointSize = detectionDialog.MinSize;
+                    maxPointSize = detectionDialog.MaxSize;
+
+                    // Start detection
+                    DetectColoredPoints();
+                }
+            }
+
+  
+        }
+
+
+        ///////////
+
+
+ 
+  
+   
+
+      
+
+        private class ConnectedComponent
+        {
+            public List<Point> Pixels = new List<Point>();
+            public int MinX = int.MaxValue, MinY = int.MaxValue;
+            public int MaxX = int.MinValue, MaxY = int.MinValue;
+
+            public int PixelCount => Pixels.Count;
+            public int Width => MaxX - MinX + 1;
+            public int Height => MaxY - MinY + 1;
+
+            public PointF GeometricCenter =>
+                new PointF((MinX + MaxX) / 2f, (MinY + MaxY) / 2f);
+
+            public void Add(int x, int y)
+            {
+                Pixels.Add(new Point(x, y));
+                MinX = Math.Min(MinX, x);
+                MinY = Math.Min(MinY, y);
+                MaxX = Math.Max(MaxX, x);
+                MaxY = Math.Max(MaxY, y);
+            }
+        }
+
+
+
+
+
+
+       
+
+
+     
+
+
+        ///////////
+
+
+
+
+
+
+
+
+
+
+
+        private void CreateMeasurementsFromDetectedPoints()
+        {
+            int startId = idCounter;
+
+            foreach (var detectedPoint in detectedPoints)
+            {
+                string pointName = $"DP{detectedPoint.ID}";
+
+                Measurement measurement = new Measurement(
+                    detectedPoint.Location,
+                    detectedPoint.Location,
+                    pointName,
+                    MeasurementType.Point,
+                    idCounter++);
+
+                measurements.Add(measurement);
+            }
+
+            UpdateMeasurementsList();
+            UpdateStatus($"Created {detectedPoints.Count} point measurements.");
+        }
+
+ 
+    
+ 
+        private int Find(int[] parent, int x)
+        {
+            if (parent[x] != x)
+                parent[x] = Find(parent, parent[x]);
+            return parent[x];
+        }
+
+   
+
+
+     
+
+        // Add these form classes at the end of your file
+
+        public class DetectionSettingsDialog : Form
+        {
+            private ComboBox colorComboBox;
+            private Button colorPickerButton;
+            private TrackBar toleranceTrackBar;
+            private NumericUpDown minSizeNumeric;
+            private NumericUpDown maxSizeNumeric;
+            private ColorDialog colorDialog;
+
+            public PointColor SelectedColor { get; private set; }
+            public Color CustomColor { get; private set; }
+            public int Tolerance { get; private set; }
+            public int MinSize { get; private set; }
+            public int MaxSize { get; private set; }
+
+            public DetectionSettingsDialog(PointColor defaultColor, Color customColor,
+                                          int defaultTolerance, int defaultMinSize, int defaultMaxSize)
+            {
+                InitializeComponent();
+
+                SelectedColor = defaultColor;
+                CustomColor = customColor;
+                Tolerance = defaultTolerance;
+                MinSize = defaultMinSize;
+                MaxSize = defaultMaxSize;
+
+                LoadSettings();
+            }
+
+            private void InitializeComponent()
+            {
+                this.Text = "Point Detection Settings";
+                this.Size = new Size(400, 350);
+                this.FormBorderStyle = FormBorderStyle.FixedDialog;
+                this.StartPosition = FormStartPosition.CenterParent;
+                this.MaximizeBox = false;
+                this.MinimizeBox = false;
+
+                // Color selection
+                Label colorLabel = new Label
+                {
+                    Text = "Sticker Color:",
+                    Location = new Point(20, 20),
+                    Size = new Size(100, 20)
+                };
+
+                colorComboBox = new ComboBox
+                {
+                    Location = new Point(130, 20),
+                    Size = new Size(150, 25),
+                    DropDownStyle = ComboBoxStyle.DropDownList
+                };
+
+                colorComboBox.Items.AddRange(new string[] { "Red", "Green", "Blue", "Yellow", "White", "Custom" });
+
+                colorPickerButton = new Button
+                {
+                    Text = "Pick Color",
+                    Location = new Point(290, 20),
+                    Size = new Size(80, 25),
+                    Enabled = false
+                };
+
+                colorPickerButton.Click += ColorPickerButton_Click;
+                colorComboBox.SelectedIndexChanged += ColorComboBox_SelectedIndexChanged;
+
+                // Color tolerance
+                Label toleranceLabel = new Label
+                {
+                    Text = "Color Tolerance:",
+                    Location = new Point(20, 60),
+                    Size = new Size(100, 20)
+                };
+
+                Label toleranceValueLabel = new Label
+                {
+                    Location = new Point(330, 60),
+                    Size = new Size(40, 20)
+                };
+
+                toleranceTrackBar = new TrackBar
+                {
+                    Location = new Point(130, 60),
+                    Size = new Size(200, 45),
+                    Minimum = 10,
+                    Maximum = 100,
+                    TickFrequency = 10,
+                    Value = 30
+                };
+
+                toleranceTrackBar.ValueChanged += (s, e) =>
+                {
+                    toleranceValueLabel.Text = toleranceTrackBar.Value.ToString();
+                };
+
+                // Minimum point size
+                Label minSizeLabel = new Label
+                {
+                    Text = "Min Point Size:",
+                    Location = new Point(20, 110),
+                    Size = new Size(100, 20)
+                };
+
+                minSizeNumeric = new NumericUpDown
+                {
+                    Location = new Point(130, 110),
+                    Size = new Size(100, 25),
+                    Minimum = 1,
+                    Maximum = 50,
+                    Value = 5
+                };
+
+                // Maximum point size
+                Label maxSizeLabel = new Label
+                {
+                    Text = "Max Point Size:",
+                    Location = new Point(20, 150),
+                    Size = new Size(100, 20)
+                };
+
+                maxSizeNumeric = new NumericUpDown
+                {
+                    Location = new Point(130, 150),
+                    Size = new Size(100, 25),
+                    Minimum = 5,
+                    Maximum = 100,
+                    Value = 30
+                };
+
+                // Buttons
+                Button detectButton = new Button
+                {
+                    Text = "Detect Points",
+                    DialogResult = DialogResult.OK,
+                    Location = new Point(100, 200),
+                    Size = new Size(100, 30)
+                };
+
+                Button cancelButton = new Button
+                {
+                    Text = "Cancel",
+                    DialogResult = DialogResult.Cancel,
+                    Location = new Point(220, 200),
+                    Size = new Size(100, 30)
+                };
+
+                // Tips
+                Label tipsLabel = new Label
+                {
+                    Text = "Tips: Use bright, solid-colored stickers.\nEnsure good lighting and contrast.\nAvoid colors similar to background.",
+                    Location = new Point(20, 250),
+                    Size = new Size(350, 60),
+                    Font = new System.Drawing.Font("Arial", 9, FontStyle.Italic)
+                };
+
+                this.Controls.AddRange(new Control[]
+                {
+            colorLabel, colorComboBox, colorPickerButton,
+            toleranceLabel, toleranceValueLabel, toleranceTrackBar,
+            minSizeLabel, minSizeNumeric,
+            maxSizeLabel, maxSizeNumeric,
+            detectButton, cancelButton, tipsLabel
+                });
+
+                this.AcceptButton = detectButton;
+                this.CancelButton = cancelButton;
+            }
+
+            private void LoadSettings()
+            {
+                colorComboBox.SelectedIndex = (int)SelectedColor;
+                toleranceTrackBar.Value = Tolerance;
+                toleranceTrackBar_ValueChanged(null, null);
+                minSizeNumeric.Value = MinSize;
+                maxSizeNumeric.Value = MaxSize;
+            }
+
+            private void ColorComboBox_SelectedIndexChanged(object sender, EventArgs e)
+            {
+                colorPickerButton.Enabled = (colorComboBox.SelectedIndex == 5); // Custom
+            }
+
+            private void ColorPickerButton_Click(object sender, EventArgs e)
+            {
+                if (colorDialog == null)
+                    colorDialog = new ColorDialog();
+
+                if (colorDialog.ShowDialog() == DialogResult.OK)
+                {
+                    CustomColor = colorDialog.Color;
+                }
+            }
+
+            private void toleranceTrackBar_ValueChanged(object sender, EventArgs e)
+            {
+                // Update the value label
+                foreach (Control ctrl in this.Controls)
+                {
+                    if (ctrl is Label label && label.Location.X == 330 && label.Location.Y == 60)
+                    {
+                        label.Text = toleranceTrackBar.Value.ToString();
+                        break;
+                    }
+                }
+            }
+
+            protected override void OnFormClosing(FormClosingEventArgs e)
+            {
+                if (this.DialogResult == DialogResult.OK)
+                {
+                    SelectedColor = (PointColor)colorComboBox.SelectedIndex;
+                    Tolerance = toleranceTrackBar.Value;
+                    MinSize = (int)minSizeNumeric.Value;
+                    MaxSize = (int)maxSizeNumeric.Value;
+                }
+
+                base.OnFormClosing(e);
+            }
+        }
+
+        public class DetectionSettingsForm : Form
+        {
+            // UI Controls
+            private Panel previewPanel;
+            private PictureBox previewPictureBox;
+            private ComboBox colorComboBox;
+            private Button colorPickerButton;
+            private TrackBar toleranceTrackBar;
+            private NumericUpDown minSizeNumeric;
+            private NumericUpDown maxSizeNumeric;
+            private TrackBar brightnessTrackBar;
+            private TrackBar contrastTrackBar;
+            private CheckBox showOriginalCheckBox;
+            private CheckBox showBoundingBoxCheckBox;
+            private Label toleranceValueLabel;
+            private Label brightnessValueLabel;
+            private Label contrastValueLabel;
+            private ColorDialog colorDialog;
+
+            // Properties
+            public PointColor SelectedColor { get; private set; }
+            public Color CustomColor { get; private set; }
+            public int Tolerance { get; private set; }
+            public int MinSize { get; private set; }
+            public int MaxSize { get; private set; }
+            public int Brightness { get; private set; }
+            public int Contrast { get; private set; }
+            public bool ShowOriginal { get; private set; }
+            public bool ShowBoundingBox { get; private set; }
+
+            // Image processing
+            private Bitmap originalImage;
+            private Bitmap previewImage;
+            private List<System.Drawing.Rectangle> detectedAreas = new List<System.Drawing.Rectangle>();
+            private System.Threading.Timer previewTimer;
+
+            public DetectionSettingsForm(PointColor defaultColor, Color customColor,
+                                        int defaultTolerance, int defaultMinSize, int defaultMaxSize,
+                                        System.Drawing.Image imageToPreview)
+            {
+                InitializeComponent();
+
+                SelectedColor = defaultColor;
+                CustomColor = customColor;
+                Tolerance = defaultTolerance;
+                MinSize = defaultMinSize;
+                MaxSize = defaultMaxSize;
+                Brightness = 0;
+                Contrast = 0;
+                ShowOriginal = true;
+                ShowBoundingBox = true;
+
+                if (imageToPreview != null)
+                {
+                    originalImage = new Bitmap(imageToPreview);
+                    previewPictureBox.Image = originalImage;
+                    previewPictureBox.SizeMode = PictureBoxSizeMode.Zoom;
+                }
+
+                LoadSettings();
+                UpdatePreview();
+            }
+
+            private void InitializeComponent()
+            {
+                this.Text = "Detection Settings with Preview";
+                this.Size = new Size(900, 700);
+                this.FormBorderStyle = FormBorderStyle.FixedDialog;
+                this.StartPosition = FormStartPosition.CenterParent;
+                this.MaximizeBox = false;
+                this.MinimizeBox = false;
+                this.BackColor = Color.FromArgb(45, 45, 48);
+                this.ForeColor = Color.White;
+
+                // Main split container
+                SplitContainer mainSplit = new SplitContainer
+                {
+                    Dock = DockStyle.Fill,
+                    Orientation = Orientation.Horizontal,
+                    SplitterDistance = 400,
+                    FixedPanel = FixedPanel.Panel1,
+                    BackColor = Color.FromArgb(37, 37, 38)
+                };
+
+                // Preview panel
+                previewPanel = new Panel
+                {
+                    Dock = DockStyle.Fill,
+                    BackColor = Color.Black,
+                    BorderStyle = BorderStyle.FixedSingle
+                };
+
+                previewPictureBox = new PictureBox
+                {
+                    Dock = DockStyle.Fill,
+                    SizeMode = PictureBoxSizeMode.Zoom
+                };
+
+                previewPanel.Controls.Add(previewPictureBox);
+                mainSplit.Panel1.Controls.Add(previewPanel);
+
+                // Settings panel
+                Panel settingsPanel = new Panel
+                {
+                    Dock = DockStyle.Fill,
+                    BackColor = Color.FromArgb(37, 37, 38),
+                    AutoScroll = true
+                };
+
+                // Create settings controls
+                CreateSettingsControls(settingsPanel);
+
+                mainSplit.Panel2.Controls.Add(settingsPanel);
+                this.Controls.Add(mainSplit);
+
+                // Setup timer for preview updates (debouncing)
+                previewTimer = new System.Threading.Timer(PreviewTimerCallback, null,
+                    Timeout.Infinite, Timeout.Infinite);
+            }
+
+            private void CreateSettingsControls(Panel parent)
+            {
+                int yPos = 20;
+                int labelWidth = 120;
+                int controlWidth = 200;
+                int valueLabelWidth = 40;
+
+                // Color Selection
+                Label colorLabel = new Label
+                {
+                    Text = "Sticker Color:",
+                    Location = new Point(20, yPos),
+                    Size = new Size(labelWidth, 25),
+                    ForeColor = Color.White,
+                    TextAlign = ContentAlignment.MiddleLeft
+                };
+
+                colorComboBox = new ComboBox
+                {
+                    Location = new Point(150, yPos),
+                    Size = new Size(controlWidth, 25),
+                    DropDownStyle = ComboBoxStyle.DropDownList,
+                    BackColor = Color.FromArgb(62, 62, 64),
+                    ForeColor = Color.White,
+                    FlatStyle = FlatStyle.Flat
+                };
+
+                colorComboBox.Items.AddRange(new string[] { "Red", "Green", "Blue", "Yellow", "White", "Custom" });
+                colorComboBox.SelectedIndexChanged += (s, e) =>
+                {
+                    colorPickerButton.Enabled = (colorComboBox.SelectedIndex == 5);
+                    SchedulePreviewUpdate();
+                };
+
+                colorPickerButton = new Button
+                {
+                    Text = "Pick Color",
+                    Location = new Point(360, yPos),
+                    Size = new Size(80, 25),
+                    Enabled = false,
+                    BackColor = Color.FromArgb(62, 62, 64),
+                    ForeColor = Color.White,
+                    FlatStyle = FlatStyle.Flat
+                };
+
+                colorPickerButton.Click += ColorPickerButton_Click;
+
+                yPos += 35;
+
+                // Color tolerance
+                Label toleranceLabel = new Label
+                {
+                    Text = "Color Tolerance:",
+                    Location = new Point(20, yPos),
+                    Size = new Size(labelWidth, 25),
+                    ForeColor = Color.White,
+                    TextAlign = ContentAlignment.MiddleLeft
+                };
+
+                toleranceValueLabel = new Label
+                {
+                    Location = new Point(360, yPos),
+                    Size = new Size(valueLabelWidth, 25),
+                    ForeColor = Color.Yellow,
+                    TextAlign = ContentAlignment.MiddleLeft
+                };
+
+                toleranceTrackBar = new TrackBar
+                {
+                    Location = new Point(150, yPos),
+                    Size = new Size(200, 45),
+                    Minimum = 10,
+                    Maximum = 100,
+                    TickFrequency = 10,
+                    Value = 30,
+                    BackColor = Color.FromArgb(37, 37, 38)
+                };
+
+                toleranceTrackBar.ValueChanged += (s, e) =>
+                {
+                    toleranceValueLabel.Text = toleranceTrackBar.Value.ToString();
+                    SchedulePreviewUpdate();
+                };
+
+                yPos += 45;
+
+                // Minimum point size
+                Label minSizeLabel = new Label
+                {
+                    Text = "Min Point Size:",
+                    Location = new Point(20, yPos),
+                    Size = new Size(labelWidth, 25),
+                    ForeColor = Color.White,
+                    TextAlign = ContentAlignment.MiddleLeft
+                };
+
+                minSizeNumeric = new NumericUpDown
+                {
+                    Location = new Point(150, yPos),
+                    Size = new Size(100, 25),
+                    Minimum = 1,
+                    Maximum = 50,
+                    Value = 5,
+                    BackColor = Color.FromArgb(62, 62, 64),
+                    ForeColor = Color.White,
+                    BorderStyle = BorderStyle.FixedSingle
+                };
+
+                minSizeNumeric.ValueChanged += (s, e) => SchedulePreviewUpdate();
+
+                yPos += 35;
+
+                // Maximum point size
+                Label maxSizeLabel = new Label
+                {
+                    Text = "Max Point Size:",
+                    Location = new Point(20, yPos),
+                    Size = new Size(labelWidth, 25),
+                    ForeColor = Color.White,
+                    TextAlign = ContentAlignment.MiddleLeft
+                };
+
+                maxSizeNumeric = new NumericUpDown
+                {
+                    Location = new Point(150, yPos),
+                    Size = new Size(100, 25),
+                    Minimum = 5,
+                    Maximum = 100,
+                    Value = 30,
+                    BackColor = Color.FromArgb(62, 62, 64),
+                    ForeColor = Color.White,
+                    BorderStyle = BorderStyle.FixedSingle
+                };
+
+                maxSizeNumeric.ValueChanged += (s, e) => SchedulePreviewUpdate();
+
+                yPos += 35;
+
+                // Brightness adjustment
+                Label brightnessLabel = new Label
+                {
+                    Text = "Brightness:",
+                    Location = new Point(20, yPos),
+                    Size = new Size(labelWidth, 25),
+                    ForeColor = Color.White,
+                    TextAlign = ContentAlignment.MiddleLeft
+                };
+
+                brightnessValueLabel = new Label
+                {
+                    Location = new Point(360, yPos),
+                    Size = new Size(valueLabelWidth, 25),
+                    ForeColor = Color.Yellow,
+                    TextAlign = ContentAlignment.MiddleLeft
+                };
+
+                brightnessTrackBar = new TrackBar
+                {
+                    Location = new Point(150, yPos),
+                    Size = new Size(200, 45),
+                    Minimum = -50,
+                    Maximum = 50,
+                    TickFrequency = 10,
+                    Value = 0,
+                    BackColor = Color.FromArgb(37, 37, 38)
+                };
+
+                brightnessTrackBar.ValueChanged += (s, e) =>
+                {
+                    brightnessValueLabel.Text = brightnessTrackBar.Value.ToString();
+                    SchedulePreviewUpdate();
+                };
+
+                yPos += 45;
+
+                // Contrast adjustment
+                Label contrastLabel = new Label
+                {
+                    Text = "Contrast:",
+                    Location = new Point(20, yPos),
+                    Size = new Size(labelWidth, 25),
+                    ForeColor = Color.White,
+                    TextAlign = ContentAlignment.MiddleLeft
+                };
+
+                contrastValueLabel = new Label
+                {
+                    Location = new Point(360, yPos),
+                    Size = new Size(valueLabelWidth, 25),
+                    ForeColor = Color.Yellow,
+                    TextAlign = ContentAlignment.MiddleLeft
+                };
+
+                contrastTrackBar = new TrackBar
+                {
+                    Location = new Point(150, yPos),
+                    Size = new Size(200, 45),
+                    Minimum = -50,
+                    Maximum = 50,
+                    TickFrequency = 10,
+                    Value = 0,
+                    BackColor = Color.FromArgb(37, 37, 38)
+                };
+
+                contrastTrackBar.ValueChanged += (s, e) =>
+                {
+                    contrastValueLabel.Text = contrastTrackBar.Value.ToString();
+                    SchedulePreviewUpdate();
+                };
+
+                yPos += 45;
+
+                // Checkboxes
+                showOriginalCheckBox = new CheckBox
+                {
+                    Text = "Show Original Image",
+                    Location = new Point(20, yPos),
+                    Size = new Size(150, 25),
+                    Checked = true,
+                    ForeColor = Color.White,
+                    BackColor = Color.Transparent
+                };
+
+                showOriginalCheckBox.CheckedChanged += (s, e) =>
+                {
+                    ShowOriginal = showOriginalCheckBox.Checked;
+                    UpdatePreview();
+                };
+
+                showBoundingBoxCheckBox = new CheckBox
+                {
+                    Text = "Show Bounding Boxes",
+                    Location = new Point(180, yPos),
+                    Size = new Size(150, 25),
+                    Checked = true,
+                    ForeColor = Color.White,
+                    BackColor = Color.Transparent
+                };
+
+                showBoundingBoxCheckBox.CheckedChanged += (s, e) =>
+                {
+                    ShowBoundingBox = showBoundingBoxCheckBox.Checked;
+                    UpdatePreview();
+                };
+
+                yPos += 35;
+
+                // Detection Statistics
+                Label statsLabel = new Label
+                {
+                    Text = "Detection Statistics:",
+                    Location = new Point(20, yPos),
+                    Size = new Size(labelWidth, 25),
+                    ForeColor = Color.Cyan,
+                    Font = new System.Drawing.Font("Arial", 9, FontStyle.Bold),
+                    TextAlign = ContentAlignment.MiddleLeft
+                };
+
+                yPos += 30;
+
+                // Stats display labels (will be updated)
+                for (int i = 0; i < 4; i++)
+                {
+                    Label statLabel = new Label
+                    {
+                        Name = $"statLabel{i}",
+                        Location = new Point(30, yPos + (i * 25)),
+                        Size = new Size(400, 25),
+                        ForeColor = Color.LightGray,
+                        TextAlign = ContentAlignment.MiddleLeft
+                    };
+                    parent.Controls.Add(statLabel);
+                }
+
+                yPos += 120;
+
+                // Buttons
+                Button applyButton = new Button
+                {
+                    Text = "Apply Settings",
+                    Location = new Point(100, yPos),
+                    Size = new Size(120, 35),
+                    BackColor = Color.FromArgb(0, 122, 204),
+                    ForeColor = Color.White,
+                    FlatStyle = FlatStyle.Flat,
+                    DialogResult = DialogResult.OK
+                };
+
+                Button cancelButton = new Button
+                {
+                    Text = "Cancel",
+                    Location = new Point(250, yPos),
+                    Size = new Size(120, 35),
+                    BackColor = Color.FromArgb(62, 62, 64),
+                    ForeColor = Color.White,
+                    FlatStyle = FlatStyle.Flat,
+                    DialogResult = DialogResult.Cancel
+                };
+
+                Button resetButton = new Button
+                {
+                    Text = "Reset to Default",
+                    Location = new Point(400, yPos),
+                    Size = new Size(120, 35),
+                    BackColor = Color.FromArgb(62, 62, 64),
+                    ForeColor = Color.White,
+                    FlatStyle = FlatStyle.Flat
+                };
+
+                resetButton.Click += ResetButton_Click;
+
+                // Add all controls to parent
+                parent.Controls.AddRange(new Control[]
+                {
+            colorLabel, colorComboBox, colorPickerButton,
+            toleranceLabel, toleranceValueLabel, toleranceTrackBar,
+            minSizeLabel, minSizeNumeric,
+            maxSizeLabel, maxSizeNumeric,
+            brightnessLabel, brightnessValueLabel, brightnessTrackBar,
+            contrastLabel, contrastValueLabel, contrastTrackBar,
+            showOriginalCheckBox, showBoundingBoxCheckBox,
+            statsLabel,
+            applyButton, cancelButton, resetButton
+                });
+
+                this.AcceptButton = applyButton;
+                this.CancelButton = cancelButton;
+            }
+
+            private void LoadSettings()
+            {
+                colorComboBox.SelectedIndex = (int)SelectedColor;
+                toleranceTrackBar.Value = Tolerance;
+                toleranceValueLabel.Text = Tolerance.ToString();
+                minSizeNumeric.Value = MinSize;
+                maxSizeNumeric.Value = MaxSize;
+                brightnessTrackBar.Value = Brightness;
+                brightnessValueLabel.Text = Brightness.ToString();
+                contrastTrackBar.Value = Contrast;
+                contrastValueLabel.Text = Contrast.ToString();
+                showOriginalCheckBox.Checked = ShowOriginal;
+                showBoundingBoxCheckBox.Checked = ShowBoundingBox;
+            }
+
+            private void ColorPickerButton_Click(object sender, EventArgs e)
+            {
+                if (colorDialog == null)
+                {
+                    colorDialog = new ColorDialog
+                    {
+                        AnyColor = true,
+                        FullOpen = true
+                    };
+                }
+
+                colorDialog.Color = CustomColor;
+
+                if (colorDialog.ShowDialog() == DialogResult.OK)
+                {
+                    CustomColor = colorDialog.Color;
+                    SchedulePreviewUpdate();
+                }
+            }
+
+            private void ResetButton_Click(object sender, EventArgs e)
+            {
+                // Reset to default values
+                colorComboBox.SelectedIndex = 0; // Red
+                toleranceTrackBar.Value = 30;
+                minSizeNumeric.Value = 5;
+                maxSizeNumeric.Value = 30;
+                brightnessTrackBar.Value = 0;
+                contrastTrackBar.Value = 0;
+                showOriginalCheckBox.Checked = true;
+                showBoundingBoxCheckBox.Checked = true;
+
+                if (colorDialog != null)
+                {
+                    CustomColor = Color.Red;
+                }
+
+                SchedulePreviewUpdate();
+            }
+
+            private void SchedulePreviewUpdate()
+            {
+                // Debounce preview updates to avoid too many redraws
+                previewTimer.Change(300, Timeout.Infinite);
+            }
+
+            private void PreviewTimerCallback(object state)
+            {
+                // This runs on a thread pool thread, so we need to invoke on UI thread
+                this.Invoke((MethodInvoker)UpdatePreview);
+            }
+
+            private void UpdatePreview()
+            {
+                if (originalImage == null) return;
+
+                try
+                {
+                    Cursor = Cursors.WaitCursor;
+
+                    // Get current settings
+                    Color targetColor = colorComboBox.SelectedIndex == 5 ?
+                        CustomColor : GetColorFromEnum((PointColor)colorComboBox.SelectedIndex);
+
+                    int tolerance = toleranceTrackBar.Value;
+                    int minSize = (int)minSizeNumeric.Value;
+                    int maxSize = (int)maxSizeNumeric.Value;
+                    int brightness = brightnessTrackBar.Value;
+                    int contrast = contrastTrackBar.Value;
+
+                    // Process image for preview
+                    Bitmap processedImage = ApplyImageAdjustments(originalImage, brightness, contrast);
+                    detectedAreas = DetectColoredAreas(processedImage, targetColor, tolerance, minSize, maxSize);
+
+                    // Create preview image
+                    previewImage = ShowOriginal ?
+                        new Bitmap(originalImage) :
+                        new Bitmap(processedImage);
+
+                    // Draw detection results
+                    using (Graphics g = Graphics.FromImage(previewImage))
+                    {
+                        g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+
+                        if (ShowBoundingBox && detectedAreas.Count > 0)
+                        {
+                            DrawDetectionResults(g, detectedAreas, targetColor);
+                        }
+                    }
+
+                    // Update preview
+                    previewPictureBox.Image = previewImage;
+
+                    // Update statistics
+                    UpdateStatistics(detectedAreas.Count);
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show($"Error updating preview: {ex.Message}", "Preview Error",
+                        MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
+                finally
+                {
+                    Cursor = Cursors.Default;
+                }
+            }
+
+            private Color GetColorFromEnum(PointColor pointColor)
+            {
+                switch (pointColor)
+                {
+                    case PointColor.Red: return Color.Red;
+                    case PointColor.Green: return Color.Green;
+                    case PointColor.Blue: return Color.Blue;
+                    case PointColor.Yellow: return Color.Yellow;
+                    case PointColor.White: return Color.White;
+                    default: return Color.Red;
+                }
+            }
+
+            private Bitmap ApplyImageAdjustments(Bitmap source, int brightness, int contrast)
+            {
+                Bitmap adjusted = new Bitmap(source.Width, source.Height);
+
+                // Simple brightness/contrast adjustment
+                float brightnessFactor = brightness / 100.0f;
+                float contrastFactor = (contrast + 100) / 100.0f;
+                contrastFactor *= contrastFactor; // Square for more noticeable effect
+
+                for (int y = 0; y < source.Height; y++)
+                {
+                    for (int x = 0; x < source.Width; x++)
+                    {
+                        Color pixel = source.GetPixel(x, y);
+
+                        // Apply brightness
+                        int r = (int)(pixel.R + (brightnessFactor * 255));
+                        int g = (int)(pixel.G + (brightnessFactor * 255));
+                        int b = (int)(pixel.B + (brightnessFactor * 255));
+
+                        // Apply contrast
+                        r = (int)(((r / 255.0f - 0.5f) * contrastFactor + 0.5f) * 255);
+                        g = (int)(((g / 255.0f - 0.5f) * contrastFactor + 0.5f) * 255);
+                        b = (int)(((b / 255.0f - 0.5f) * contrastFactor + 0.5f) * 255);
+
+                        // Clamp values
+                        r = Math.Max(0, Math.Min(255, r));
+                        g = Math.Max(0, Math.Min(255, g));
+                        b = Math.Max(0, Math.Min(255, b));
+
+                        adjusted.SetPixel(x, y, Color.FromArgb(pixel.A, r, g, b));
+                    }
+                }
+
+                return adjusted;
+            }
+
+            private List<System.Drawing.Rectangle> DetectColoredAreas(Bitmap image, Color targetColor,
+                                                      int tolerance, int minSize, int maxSize)
+            {
+                List<System.Drawing.Rectangle> areas = new List<System.Drawing.Rectangle>();
+                bool[,] visited = new bool[image.Width, image.Height];
+
+                for (int x = 0; x < image.Width; x += 2) // Sample every 2 pixels for speed
+                {
+                    for (int y = 0; y < image.Height; y += 2)
+                    {
+                        if (!visited[x, y])
+                        {
+                            Color pixelColor = image.GetPixel(x, y);
+
+                            if (IsColorSimilar(pixelColor, targetColor, tolerance))
+                            {
+                                System.Drawing.Rectangle bounds = FloodFillBounds(image, x, y, targetColor,
+                                                                  tolerance, visited);
+
+                                int area = bounds.Width * bounds.Height;
+                                if (area >= minSize && area <= maxSize)
+                                {
+                                    areas.Add(bounds);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                return areas;
+            }
+
+            private bool IsColorSimilar(Color c1, Color c2, int tolerance)
+            {
+                int rDiff = c1.R - c2.R;
+                int gDiff = c1.G - c2.G;
+                int bDiff = c1.B - c2.B;
+
+                double distance = Math.Sqrt(rDiff * rDiff + gDiff * gDiff + bDiff * bDiff);
+                return distance <= tolerance;
+            }
+
+            private System.Drawing.Rectangle FloodFillBounds(Bitmap image, int startX, int startY,
+                                             Color targetColor, int tolerance, bool[,] visited)
+            {
+                int minX = startX, maxX = startX;
+                int minY = startY, maxY = startY;
+                int pixelCount = 0;
+
+                Stack<Point> stack = new Stack<Point>();
+                stack.Push(new Point(startX, startY));
+
+                while (stack.Count > 0)
+                {
+                    Point p = stack.Pop();
+
+                    if (p.X < 0 || p.X >= image.Width ||
+                        p.Y < 0 || p.Y >= image.Height ||
+                        visited[p.X, p.Y])
+                        continue;
+
+                    Color pixelColor = image.GetPixel(p.X, p.Y);
+
+                    if (IsColorSimilar(pixelColor, targetColor, tolerance))
+                    {
+                        visited[p.X, p.Y] = true;
+                        pixelCount++;
+
+                        // Update bounds
+                        minX = Math.Min(minX, p.X);
+                        maxX = Math.Max(maxX, p.X);
+                        minY = Math.Min(minY, p.Y);
+                        maxY = Math.Max(maxY, p.Y);
+
+                        // Add neighbors (4-directional for speed)
+                        if (p.X > 0) stack.Push(new Point(p.X - 1, p.Y));
+                        if (p.X < image.Width - 1) stack.Push(new Point(p.X + 1, p.Y));
+                        if (p.Y > 0) stack.Push(new Point(p.X, p.Y - 1));
+                        if (p.Y < image.Height - 1) stack.Push(new Point(p.X, p.Y + 1));
+                    }
+                }
+
+                return new System.Drawing.Rectangle(minX, minY, maxX - minX + 1, maxY - minY + 1);
+            }
+
+            private void DrawDetectionResults(Graphics g, List<System.Drawing.Rectangle> areas, Color targetColor)
+            {
+                int i = 1;
+                foreach (var area in areas)
+                {
+                    // Draw bounding box
+                    using (Pen boxPen = new Pen(Color.Lime, 2))
+                    {
+                        g.DrawRectangle(boxPen, area);
+                    }
+
+                    // Draw center point
+                    Point center = new Point(area.X + area.Width / 2, area.Y + area.Height / 2);
+                    using (Brush centerBrush = new SolidBrush(Color.Cyan))
+                    {
+                        g.FillEllipse(centerBrush, center.X - 3, center.Y - 3, 6, 6);
+                    }
+
+                    // Draw area number
+                    using (System.Drawing.Font font = new System.Drawing.Font("Arial", 10, FontStyle.Bold))
+                    using (Brush textBrush = new SolidBrush(Color.Yellow))
+                    using (Brush bgBrush = new SolidBrush(Color.FromArgb(128, Color.Black)))
+                    {
+                        string text = i.ToString();
+                        SizeF textSize = g.MeasureString(text, font);
+
+                        RectangleF textRect = new RectangleF(
+                            area.X,
+                            area.Y - textSize.Height - 2,
+                            textSize.Width + 4,
+                            textSize.Height);
+
+                        g.FillRectangle(bgBrush, textRect);
+                        g.DrawString(text, font, textBrush, area.X + 2, area.Y - textSize.Height);
+                    }
+
+                    i++;
+                }
+            }
+
+            private void UpdateStatistics(int detectedCount)
+            {
+                // Update statistics labels
+                for (int i = 0; i < 4; i++)
+                {
+                    Label statLabel = this.Controls.Find($"statLabel{i}", true).FirstOrDefault() as Label;
+                    if (statLabel != null)
+                    {
+                        switch (i)
+                        {
+                            case 0:
+                                statLabel.Text = $"Detected Points: {detectedCount}";
+                                break;
+                            case 1:
+                                statLabel.Text = $"Color: {colorComboBox.SelectedItem}";
+                                break;
+                            case 2:
+                                statLabel.Text = $"Tolerance: {toleranceTrackBar.Value}";
+                                break;
+                            case 3:
+                                statLabel.Text = $"Size Range: {minSizeNumeric.Value} - {maxSizeNumeric.Value} pixels";
+                                break;
+                        }
+                    }
+                }
+            }
+
+            protected override void OnFormClosing(FormClosingEventArgs e)
+            {
+                // Save current settings
+                if (this.DialogResult == DialogResult.OK)
+                {
+                    SelectedColor = (PointColor)colorComboBox.SelectedIndex;
+                    Tolerance = toleranceTrackBar.Value;
+                    MinSize = (int)minSizeNumeric.Value;
+                    MaxSize = (int)maxSizeNumeric.Value;
+                    Brightness = brightnessTrackBar.Value;
+                    Contrast = contrastTrackBar.Value;
+                    ShowOriginal = showOriginalCheckBox.Checked;
+                    ShowBoundingBox = showBoundingBoxCheckBox.Checked;
+                }
+
+                // Clean up timer
+                previewTimer?.Dispose();
+
+                base.OnFormClosing(e);
+            }
+
+            protected override void Dispose(bool disposing)
+            {
+                if (disposing)
+                {
+                    previewTimer?.Dispose();
+                    originalImage?.Dispose();
+                    previewImage?.Dispose();
+                }
+                base.Dispose(disposing);
+            }
+        }
+
+
+
         /////
         private void FindAllIntersections()
         {
@@ -327,6 +1903,10 @@ namespace kinectProject
 
             // Calculer les angles pour chaque point d'intersection
             CalculateAllAngles();
+
+            AddIntersectionAnglesToMeasurements();
+
+           
         }
 
         private Point? FindLineIntersection(Point p1, Point p2, Point p3, Point p4)
@@ -360,35 +1940,26 @@ namespace kinectProject
 
                 if (ip.LineIDs.Count < 2) continue;
 
-                // Obtenir les vecteurs pour chaque ligne
-                var vectors = new List<Tuple<int, PointF>>();
+                // Get the lines at this intersection
+                var lines = measurements.Where(m => ip.LineIDs.Contains(m.ID)).ToList();
 
-                foreach (int lineId in ip.LineIDs)
+                // For each pair of lines at this intersection
+                for (int j = 0; j < lines.Count; j++)
                 {
-                    var line = measurements.FirstOrDefault(m => m.ID == lineId);
-                    if (line.Type == MeasurementType.None) continue;
-
-                    PointF vector = GetLineVectorAtPoint(line, ip.Location);
-                    vectors.Add(new Tuple<int, PointF>(lineId, vector));
-                }
-
-                // Pour chaque paire de lignes
-                for (int j = 0; j < vectors.Count; j++)
-                {
-                    for (int k = j + 1; k < vectors.Count; k++)
+                    for (int k = j + 1; k < lines.Count; k++)
                     {
-                        // Éviter les paires de la même ligne
-                        if (vectors[j].Item1 == vectors[k].Item1) continue;
+                        var line1 = lines[j];
+                        var line2 = lines[k];
 
-                        // Calculer l'angle entre les vecteurs
-                        double dot = vectors[j].Item2.X * vectors[k].Item2.X +
-                                   vectors[j].Item2.Y * vectors[k].Item2.Y;
-                        double cross = vectors[j].Item2.X * vectors[k].Item2.Y -
-                                     vectors[j].Item2.Y * vectors[k].Item2.X;
-                        double mag1 = Math.Sqrt(vectors[j].Item2.X * vectors[j].Item2.X +
-                                              vectors[j].Item2.Y * vectors[j].Item2.Y);
-                        double mag2 = Math.Sqrt(vectors[k].Item2.X * vectors[k].Item2.X +
-                                              vectors[k].Item2.Y * vectors[k].Item2.Y);
+                        // Get vectors for each line at the intersection point
+                        PointF vector1 = GetLineVectorAtIntersection(line1, ip.Location);
+                        PointF vector2 = GetLineVectorAtIntersection(line2, ip.Location);
+
+                        // Calculate angle between vectors
+                        double dot = vector1.X * vector2.X + vector1.Y * vector2.Y;
+                        double cross = vector1.X * vector2.Y - vector1.Y * vector2.X;
+                        double mag1 = Math.Sqrt(vector1.X * vector1.X + vector1.Y * vector1.Y);
+                        double mag2 = Math.Sqrt(vector2.X * vector2.X + vector2.Y * vector2.Y);
 
                         if (mag1 == 0 || mag2 == 0) continue;
 
@@ -396,20 +1967,15 @@ namespace kinectProject
                         double angleRad = Math.Acos(cosTheta);
                         double angleDeg = angleRad * (180 / Math.PI);
 
-                        // Toujours prendre l'angle aigu (≤ 90°)
+                        // Determine which angle to store
                         double acuteAngle = Math.Min(angleDeg, 180 - angleDeg);
                         double obtuseAngle = 180 - acuteAngle;
 
-                        // Stocker les DEUX angles
+                        // Add both angles to the intersection point
                         ip.Angles.Add(new Tuple<int, int, double>(
-                            Math.Min(vectors[j].Item1, vectors[k].Item1),
-                            Math.Max(vectors[j].Item1, vectors[k].Item1),
-                            Math.Round(acuteAngle, 1))); // Angle aigu
-
+                            line1.ID, line2.ID, Math.Round(acuteAngle, 1)));
                         ip.Angles.Add(new Tuple<int, int, double>(
-                            Math.Min(vectors[j].Item1, vectors[k].Item1),
-                            Math.Max(vectors[j].Item1, vectors[k].Item1),
-                            Math.Round(obtuseAngle, 1))); // Angle obtus
+                            line1.ID, line2.ID, Math.Round(obtuseAngle, 1)));
                     }
                 }
 
@@ -417,6 +1983,24 @@ namespace kinectProject
             }
         }
 
+        private PointF GetLineVectorAtIntersection(Measurement line, Point intersection)
+        {
+            // Determine which endpoint is closer to the intersection
+            double distToStart = CalculateDistance(line.Start, intersection);
+            double distToEnd = CalculateDistance(line.End, intersection);
+
+            // Return vector from intersection to the other endpoint
+            if (distToStart < distToEnd)
+            {
+                // Intersection is near the start, vector goes to end
+                return new PointF(line.End.X - intersection.X, line.End.Y - intersection.Y);
+            }
+            else
+            {
+                // Intersection is near the end, vector goes to start
+                return new PointF(line.Start.X - intersection.X, line.Start.Y - intersection.Y);
+            }
+        }
         private PointF GetLineVectorAtPoint(Measurement line, Point intersectionPoint)
         {
             Point start, end;
@@ -659,7 +2243,66 @@ namespace kinectProject
                 intersectionPoints[index] = existing;
             }
         }
+        ////
+        private string GetIntersectionDataForPdf()
+        {
+            if (intersectionPoints.Count == 0)
+                return "No intersection points detected.";
 
+            StringBuilder sb = new StringBuilder();
+            sb.AppendLine("INTERSECTION POINTS ANALYSIS");
+            sb.AppendLine("=============================");
+
+            foreach (var ip in intersectionPoints.OrderBy(p => p.ID))
+            {
+                sb.AppendLine();
+                sb.AppendLine($"Intersection Point P{ip.ID}");
+                sb.AppendLine($"Type: {ip.Type}");
+                sb.AppendLine($"Coordinates: ({ip.Location.X}, {ip.Location.Y})");
+                sb.AppendLine($"Lines involved: {string.Join(", ", ip.LineIDs.Select(id => $"L{id}"))}");
+
+                if (ip.Angles.Count > 0)
+                {
+                    sb.AppendLine("Angles between lines:");
+
+                    // Group angles by line pairs
+                    var angleGroups = ip.Angles
+                        .GroupBy(a => new { Line1 = Math.Min(a.Item1, a.Item2), Line2 = Math.Max(a.Item1, a.Item2) })
+                        .Select(g => new
+                        {
+                            Line1 = g.Key.Line1,
+                            Line2 = g.Key.Line2,
+                            Angles = g.Select(x => x.Item3).Distinct().OrderBy(a => a).ToList()
+                        })
+                        .OrderBy(g => g.Line1).ThenBy(g => g.Line2);
+
+                    foreach (var group in angleGroups)
+                    {
+                        if (group.Angles.Count == 2)
+                        {
+                            sb.AppendLine($"  • Between L{group.Line1} and L{group.Line2}:");
+                            sb.AppendLine($"    Acute angle: {group.Angles[0]:F1}°");
+                            sb.AppendLine($"    Obtuse angle: {group.Angles[1]:F1}°");
+                            sb.AppendLine($"    Sum: {(group.Angles[0] + group.Angles[1]):F1}°");
+                        }
+                        else if (group.Angles.Count == 1)
+                        {
+                            sb.AppendLine($"  • Between L{group.Line1} and L{group.Line2}: {group.Angles[0]:F1}°");
+                            if (Math.Abs(group.Angles[0] - 90) < 0.1)
+                                sb.AppendLine("    → RIGHT ANGLE");
+                        }
+                    }
+                }
+                else
+                {
+                    sb.AppendLine("No angle measurements available");
+                }
+
+                sb.AppendLine(new string('-', 50));
+            }
+
+            return sb.ToString();
+        }
         ////
         private void DrawingPanel_Resize(object sender, EventArgs e)
         {
@@ -689,6 +2332,123 @@ namespace kinectProject
             toolStrip.Items.Add(separator);
         }
 
+        //////////
+
+        private void AddIntersectionAnglesToMeasurements()
+        {
+            // First, remove any existing intersection angles to avoid duplicates
+            measurements.RemoveAll(m => m.AngleValue.HasValue);
+
+            int newIdStart = idCounter; // Start from current idCounter
+
+            foreach (var ip in intersectionPoints)
+            {
+                if (ip.Angles.Count == 0) continue;
+
+                // Group angles by line pairs and get distinct values
+                var distinctAngles = ip.Angles
+                    .GroupBy(a => new {
+                        Line1 = Math.Min(a.Item1, a.Item2),
+                        Line2 = Math.Max(a.Item1, a.Item2),
+                        Angle = a.Item3
+                    })
+                    .Select(g => new
+                    {
+                        Line1 = g.Key.Line1,
+                        Line2 = g.Key.Line2,
+                        Angle = g.Key.Angle
+                    })
+                    .ToList();
+
+                // Create measurements for each angle
+                foreach (var angleData in distinctAngles)
+                {
+                    // Generate a name based on angle type
+                    string angleType = (angleData.Angle < 90) ? "A" :
+                                      (Math.Abs(angleData.Angle - 90) < 0.5) ? "R" : "O";
+
+                    string name = $"IA{idCounter}{angleType}";
+
+                    // Create the measurement
+                    Measurement angleMeasurement = CreateIntersectionAngleMeasurement(
+                        name, idCounter, ip.Location, angleData.Angle,
+                        angleData.Line1, angleData.Line2);
+
+                    measurements.Add(angleMeasurement);
+                    idCounter++;
+                }
+            }
+
+            UpdateMeasurementsList();
+            drawingPanel.Invalidate();
+        }
+        private int GetNextAngleMeasurementNumber()
+        {
+            // Find the highest existing intersection angle measurement number
+            int maxNumber = 0;
+            foreach (var m in measurements)
+            {
+                if (m.AngleValue.HasValue && m.Name.StartsWith("IA"))
+                {
+                    // Extract number from name like "IA1A" or "IA2"
+                    string numberPart = m.Name.Substring(2); // Remove "IA"
+
+                    // Remove any trailing letters
+                    while (numberPart.Length > 0 && !char.IsDigit(numberPart.Last()))
+                    {
+                        numberPart = numberPart.Substring(0, numberPart.Length - 1);
+                    }
+
+                    if (int.TryParse(numberPart, out int num))
+                    {
+                        maxNumber = Math.Max(maxNumber, num);
+                    }
+                }
+            }
+            return maxNumber + 1;
+        }
+
+        // Create a new static method to properly create intersection angle measurements
+        private static Measurement CreateIntersectionAngleMeasurement(string name, int id, Point vertex,
+                                                                     double angleValue, int line1Id, int line2Id)
+        {
+            var measurement = new Measurement(vertex, vertex, name, MeasurementType.Angle, id);
+            measurement.Vertex = vertex;
+            measurement.AngleValue = angleValue;
+            measurement.RelatedLineIDs = new List<int> { line1Id, line2Id };
+            return measurement;
+        }
+        private void CreateIntersectionAngleMeasurement(IntersectionPoint ip, int line1Id, int line2Id,
+                                                        double angleValue, string name, int id)
+        {
+            // Find the lines that create this angle
+            var line1 = measurements.FirstOrDefault(m => m.ID == line1Id);
+            var line2 = measurements.FirstOrDefault(m => m.ID == line2Id);
+
+            if (line1.Type == MeasurementType.None || line2.Type == MeasurementType.None)
+                return;
+
+            // Create a new measurement for this intersection angle
+            Measurement angleMeasurement = new Measurement(
+                ip.Location, // Use intersection point as start
+                ip.Location, // Same point for end (since it's just an angle)
+                name,
+                MeasurementType.Angle,
+                idCounter++
+            );
+
+            // Store additional information in a custom way
+            // We'll add properties to store the angle value and which lines it's between
+            angleMeasurement.Vertex = ip.Location; // Store vertex location
+
+            // We need to store the angle value somehow. Let's modify the Measurement struct:
+            // (I'll show how to modify it after this method)
+
+            measurements.Add(angleMeasurement);
+        }
+
+
+        /////////
         #region Zoom and Pan Methods
 
         private void BtnZoomIn_Click(object sender, EventArgs e)
@@ -835,6 +2595,8 @@ namespace kinectProject
                     DrawMeasurement(e.Graphics, m);
                 }
 
+                DrawDetectedPoints(e.Graphics);
+
                 // AUGMENTATION: Dessiner les points d'intersection
                 DrawIntersectionPoints(e.Graphics);
 
@@ -864,6 +2626,102 @@ namespace kinectProject
                 // Error handling...
             }
         }
+        ////////
+
+        private void DrawDetectedPoints(Graphics g)
+        {
+            if (detectedPoints.Count == 0) return;
+
+            g.Transform = transformMatrix;
+
+            foreach (var point in detectedPoints)
+            {
+                Color pointColor = colorMap[point.Color];
+                int pointSize = Math.Max(3, (int)(point.Radius / zoomFactor));
+
+                using (Brush brush = new SolidBrush(pointColor))
+                using (Pen pen = new Pen(Color.Black, 1))
+                {
+                    // Draw point
+                    g.FillEllipse(brush,
+                        point.Location.X - pointSize / 2,
+                        point.Location.Y - pointSize / 2,
+                        pointSize, pointSize);
+                    g.DrawEllipse(pen,
+                        point.Location.X - pointSize / 2,
+                        point.Location.Y - pointSize / 2,
+                        pointSize, pointSize);
+
+                    // Draw point ID
+                    using (System.Drawing.Font font = new System.Drawing.Font("Arial", Math.Max(8, 10 / zoomFactor), FontStyle.Bold))
+                    using (Brush textBrush = new SolidBrush(Color.White))
+                    using (Brush bgBrush = new SolidBrush(Color.FromArgb(200, Color.Black)))
+                    {
+                        string idText = $"P{point.ID}";
+                        SizeF textSize = g.MeasureString(idText, font);
+
+                        RectangleF textRect = new RectangleF(
+                            point.Location.X - textSize.Width / 2,
+                            point.Location.Y + pointSize + 2,
+                            textSize.Width + 4,
+                            textSize.Height);
+
+                        g.FillRectangle(bgBrush, textRect);
+                        g.DrawString(idText, font, textBrush,
+                            point.Location.X - textSize.Width / 2 + 2,
+                            point.Location.Y + pointSize + 4);
+                    }
+                }
+            }
+
+            // Draw body landmarks if any
+            DrawBodyLandmarks(g);
+        }
+
+        private void DrawBodyLandmarks(Graphics g)
+        {
+            if (bodyLandmarks.Count == 0) return;
+
+            foreach (var landmark in bodyLandmarks)
+            {
+                int pointSize = Math.Max(4, (int)(8 / zoomFactor));
+
+                using (Brush brush = new SolidBrush(Color.Orange))
+                using (Pen pen = new Pen(Color.Black, 1))
+                {
+                    // Draw landmark point
+                    g.FillEllipse(brush,
+                        landmark.Location.X - pointSize / 2,
+                        landmark.Location.Y - pointSize / 2,
+                        pointSize, pointSize);
+                    g.DrawEllipse(pen,
+                        landmark.Location.X - pointSize / 2,
+                        landmark.Location.Y - pointSize / 2,
+                        pointSize, pointSize);
+
+                    // Draw landmark name
+                    using (System.Drawing.Font font = new System.Drawing.Font("Arial", Math.Max(8, 10 / zoomFactor), FontStyle.Bold))
+                    using (Brush textBrush = new SolidBrush(Color.White))
+                    using (Brush bgBrush = new SolidBrush(Color.FromArgb(200, Color.Blue)))
+                    {
+                        SizeF textSize = g.MeasureString(landmark.Name, font);
+
+                        RectangleF textRect = new RectangleF(
+                            landmark.Location.X - textSize.Width / 2,
+                            landmark.Location.Y - textSize.Height - pointSize - 5,
+                            textSize.Width + 4,
+                            textSize.Height);
+
+                        g.FillRectangle(bgBrush, textRect);
+                        g.DrawString(landmark.Name, font, textBrush,
+                            landmark.Location.X - textSize.Width / 2 + 2,
+                            landmark.Location.Y - textSize.Height - pointSize - 3);
+                    }
+                }
+            }
+        }
+
+        ////////
         private void DrawCurrentToolPreview(Graphics g)
         {
             Point currentPos = drawingPanel.PointToClient(Cursor.Position);
@@ -1071,24 +2929,18 @@ namespace kinectProject
                     case MeasurementType.Angle:
                         if (m.Vertex.HasValue)
                         {
-                            // Draw the segment
-                            g.DrawLine(pen, m.Vertex.Value, m.End);
-                            g.FillEllipse(brush, m.Vertex.Value.X - pointSize / 2, m.Vertex.Value.Y - pointSize / 2, pointSize, pointSize);
-                            g.FillEllipse(brush, m.End.X - pointSize / 2, m.End.Y - pointSize / 2, pointSize, pointSize);
-
-                            // Find the other segment that shares the same vertex and ID
-                            Measurement otherSegment = measurements.FirstOrDefault(meas =>
-                                meas.Type == MeasurementType.Angle &&
-                                meas.Vertex.HasValue &&
-                                meas.Vertex.Value == m.Vertex.Value &&
-                                meas.ID == m.ID &&
-                                meas.End != m.End);
-
-                            if (otherSegment.Type == MeasurementType.Angle)
+                            if (m.AngleValue.HasValue)
                             {
-                                // Draw angle value at vertex with ID
-                                double angle = CalculateAngle(m, otherSegment);
-                                string angleText = $"{m.ID}: {angle:F1}°";
+                                // This is an INTERSECTION ANGLE
+                                // Draw intersection angle point at the vertex
+                                g.FillEllipse(brush, m.Vertex.Value.X - pointSize / 2, m.Vertex.Value.Y - pointSize / 2, pointSize, pointSize);
+
+                                // Draw angle value with special formatting for intersection angles
+                                string angleText = m.AngleValue.Value.ToString("F1") + "°";
+                                if (m.RelatedLineIDs != null && m.RelatedLineIDs.Count >= 2)
+                                {
+                                    angleText = $"∠L{m.RelatedLineIDs[0]}-L{m.RelatedLineIDs[1]}: {angleText}";
+                                }
 
                                 SizeF angleTextSize = g.MeasureString(angleText, font);
                                 RectangleF angleTextRect = new RectangleF(
@@ -1101,8 +2953,54 @@ namespace kinectProject
                                     m.Vertex.Value.X - angleTextSize.Width / 2 + 2,
                                     m.Vertex.Value.Y - angleTextSize.Height - 18);
 
-                                // Draw angle arc
-                                DrawAngleArc(g, m, otherSegment);
+                                // Draw a small arc to indicate it's an angle
+                                using (Pen arcPen = new Pen(Color.FromArgb(150, Color.Orange), 1))
+                                {
+                                    // Adjust arc radius based on zoom
+                                    float arcRadius = 15f / zoomFactor;
+                                    g.DrawArc(arcPen,
+                                        m.Vertex.Value.X - arcRadius,
+                                        m.Vertex.Value.Y - arcRadius,
+                                        arcRadius * 2,
+                                        arcRadius * 2, 0, 120);
+                                }
+                            }
+                            else
+                            {
+                                // This is a REGULAR ANGLE (created with angle tool)
+                                // Draw the segment
+                                g.DrawLine(pen, m.Vertex.Value, m.End);
+                                g.FillEllipse(brush, m.Vertex.Value.X - pointSize / 2, m.Vertex.Value.Y - pointSize / 2, pointSize, pointSize);
+                                g.FillEllipse(brush, m.End.X - pointSize / 2, m.End.Y - pointSize / 2, pointSize, pointSize);
+
+                                // Find the other segment that shares the same vertex and ID
+                                Measurement otherSegment = measurements.FirstOrDefault(meas =>
+                                    meas.Type == MeasurementType.Angle &&
+                                    meas.Vertex.HasValue &&
+                                    meas.Vertex.Value == m.Vertex.Value &&
+                                    meas.ID == m.ID &&
+                                    meas.End != m.End);
+
+                                if (otherSegment.Type == MeasurementType.Angle)
+                                {
+                                    // Draw angle value at vertex with ID
+                                    double angle = CalculateAngle(m, otherSegment);
+                                    string angleText = $"{m.ID}: {angle:F1}°";
+
+                                    SizeF angleTextSize = g.MeasureString(angleText, font);
+                                    RectangleF angleTextRect = new RectangleF(
+                                        m.Vertex.Value.X - angleTextSize.Width / 2,
+                                        m.Vertex.Value.Y - angleTextSize.Height - 20,
+                                        angleTextSize.Width + 4,
+                                        angleTextSize.Height);
+                                    g.FillRectangle(bgBrush, angleTextRect);
+                                    g.DrawString(angleText, font, textBrush,
+                                        m.Vertex.Value.X - angleTextSize.Width / 2 + 2,
+                                        m.Vertex.Value.Y - angleTextSize.Height - 18);
+
+                                    // Draw angle arc
+                                    DrawAngleArc(g, m, otherSegment);
+                                }
                             }
                         }
                         break;
@@ -1142,8 +3040,13 @@ namespace kinectProject
                         // Draw perpendicular symbol at the intersection point
                         using (Pen perpendicularPen = new Pen(Color.White, 1))
                         {
-                            int symbolSize = 4;
-                            g.DrawRectangle(perpendicularPen, m.Start.X - symbolSize, m.Start.Y - symbolSize, symbolSize * 2, symbolSize * 2);
+                            int symbolSize = (int)(4 / zoomFactor);
+                            symbolSize = Math.Max(2, symbolSize);
+                            g.DrawRectangle(perpendicularPen,
+                                m.Start.X - symbolSize,
+                                m.Start.Y - symbolSize,
+                                symbolSize * 2,
+                                symbolSize * 2);
                         }
 
                         // Draw ID
@@ -1155,6 +3058,10 @@ namespace kinectProject
                             perpTextSize.Width + 4, perpTextSize.Height);
                         g.FillRectangle(bgBrush, perpTextRect);
                         g.DrawString(perpId, font, textBrush, perpMidPoint.X - perpTextSize.Width / 2 + 2, perpMidPoint.Y - perpTextSize.Height - 8);
+                        break;
+
+                    default:
+                        // Handle any other measurement types if needed
                         break;
                 }
             }
@@ -1641,11 +3548,6 @@ namespace kinectProject
                         string angleText = $"∠(L{group.Line1}-L{group.Line2}): {group.Angles[0]:F1}° & {group.Angles[1]:F1}°";
                         ToolStripMenuItem angleItem = new ToolStripMenuItem(angleText);
 
-                        //// Sous-menu avec détails
-                        //angleItem.DropDownItems.Add($"Acute angle: {group.Angles[0]:F1}°");
-                        //angleItem.DropDownItems.Add($"Obtuse angle: {group.Angles[1]:F1}°");
-                        //angleItem.DropDownItems.Add($"Sum: {(group.Angles[0] + group.Angles[1]):F1}°");
-                        //angleItem.DropDownItems.Add($"Difference: {Math.Abs(group.Angles[1] - group.Angles[0]):F1}°");
 
                         contextMenu.Items.Add(angleItem);
                     }
@@ -1664,30 +3566,7 @@ namespace kinectProject
 
             contextMenu.Items.Add(new ToolStripSeparator());
 
-            //// Calculer les statistiques avec plus de précision
-            //if (intersection.Angles.Count > 0)
-            //{
-            //    var allAngles = intersection.Angles.Select(a => a.Item3).Distinct().OrderBy(a => a).ToList();
-
-            //    StringBuilder statsText = new StringBuilder();
-            //    statsText.AppendLine($"Total angles: {allAngles.Count}");
-            //    statsText.AppendLine($"Acute angles: {allAngles.Where(a => a < 90).Count()}");
-            //    statsText.AppendLine($"Right angles: {allAngles.Where(a => Math.Abs(a - 90) < 0.5).Count()}");
-            //    statsText.AppendLine($"Obtuse angles: {allAngles.Where(a => a > 90).Count()}");
-
-            //    if (allAngles.Count > 0)
-            //    {
-            //        statsText.AppendLine($"Min: {allAngles.Min():F2}°");
-            //        statsText.AppendLine($"Max: {allAngles.Max():F2}°");
-            //        statsText.AppendLine($"Avg: {allAngles.Average():F2}°");
-            //    }
-
-            //    ToolStripMenuItem statsItem = new ToolStripMenuItem("📊 Statistics");
-            //    statsItem.DropDownItems.Add(statsText.ToString());
-            //    contextMenu.Items.Add(statsItem);
-
-            //    contextMenu.Items.Add(new ToolStripSeparator());
-            //}
+          
 
             // Boutons d'action
             ToolStripMenuItem copyItem = new ToolStripMenuItem("📋 Copy All Data");
@@ -2512,7 +4391,21 @@ namespace kinectProject
         {
             Measurement m = measurements[index];
 
-            using (var renameDialog = new RenameDialog(m.Name))
+            string currentName = m.Name;
+            string prompt = "Enter new name for measurement:";
+
+            // Special prompt for intersection angles
+            if (m.AngleValue.HasValue)
+            {
+                string angleInfo = $"Current angle: {m.AngleValue:F1}°";
+                if (m.RelatedLineIDs != null && m.RelatedLineIDs.Count >= 2)
+                {
+                    angleInfo += $" (between L{m.RelatedLineIDs[0]} and L{m.RelatedLineIDs[1]})";
+                }
+                prompt = $"Enter new name for intersection angle:\n{angleInfo}";
+            }
+
+            using (var renameDialog = new CustomRenameDialog(currentName, prompt))
             {
                 if (renameDialog.ShowDialog() == DialogResult.OK)
                 {
@@ -2521,6 +4414,71 @@ namespace kinectProject
                     UpdateMeasurementsList();
                     drawingPanel.Invalidate();
                     UpdateStatus($"Measurement renamed to {m.Name}");
+                }
+            }
+        }
+
+        public class CustomRenameDialog : Form
+        {
+            private TextBox textBox;
+            public string NewName { get; private set; }
+
+            public CustomRenameDialog(string currentName, string prompt = "Enter new name for measurement:")
+            {
+                InitializeComponent(currentName, prompt);
+            }
+
+            private void InitializeComponent(string currentName, string prompt)
+            {
+                this.Text = "Rename Measurement";
+                this.Size = new Size(350, 150);
+                this.FormBorderStyle = FormBorderStyle.FixedDialog;
+                this.StartPosition = FormStartPosition.CenterParent;
+                this.MaximizeBox = false;
+                this.MinimizeBox = false;
+
+                Label label = new Label();
+                label.Text = prompt;
+                label.Location = new Point(20, 20);
+                label.Size = new Size(300, 30);
+                label.AutoSize = true;
+
+                textBox = new TextBox();
+                textBox.Text = currentName;
+                textBox.Location = new Point(20, 60);
+                textBox.Size = new Size(300, 20);
+
+                Button okButton = new Button();
+                okButton.Text = "OK";
+                okButton.DialogResult = DialogResult.OK;
+                okButton.Location = new Point(80, 90);
+                okButton.Size = new Size(75, 25);
+                okButton.Click += OkButton_Click;
+
+                Button cancelButton = new Button();
+                cancelButton.Text = "Cancel";
+                cancelButton.DialogResult = DialogResult.Cancel;
+                cancelButton.Location = new Point(170, 90);
+                cancelButton.Size = new Size(75, 25);
+
+                this.Controls.Add(label);
+                this.Controls.Add(textBox);
+                this.Controls.Add(okButton);
+                this.Controls.Add(cancelButton);
+                this.AcceptButton = okButton;
+                this.CancelButton = cancelButton;
+            }
+
+            private void OkButton_Click(object sender, EventArgs e)
+            {
+                if (!string.IsNullOrWhiteSpace(textBox.Text))
+                {
+                    NewName = textBox.Text.Trim();
+                }
+                else
+                {
+                    MessageBox.Show("Please enter a valid name.");
+                    this.DialogResult = DialogResult.None;
                 }
             }
         }
@@ -2795,8 +4753,24 @@ namespace kinectProject
                     double refUnits = refPixels / pixelToRealRatio;
                     return $"{m.Name} (ID: {m.ID}): {refPixels:F1} px ({refUnits:F2} cm) [Reference]";
                 case MeasurementType.Angle:
-                    double angle = CalculateAngle(m);
-                    return $"{m.Name} (ID: {m.ID}): {angle:F1}°";
+                    if (m.AngleValue.HasValue)
+                    {
+                        // This is an intersection angle
+                        if (m.RelatedLineIDs.Count >= 2)
+                        {
+                            return $"{m.Name} (ID: {m.ID}): {m.AngleValue:F1}° between L{m.RelatedLineIDs[0]} and L{m.RelatedLineIDs[1]}";
+                        }
+                        else
+                        {
+                            return $"{m.Name} (ID: {m.ID}): {m.AngleValue:F1}°";
+                        }
+                    }
+                    else
+                    {
+                        // Regular angle measurement
+                        double angle = CalculateAngle(m);
+                        return $"{m.Name} (ID: {m.ID}): {angle:F1}°";
+                    }
                 case MeasurementType.AngleWithAxis:
                     double axisAngle = CalculateAngleWithAxis(m);
                     return $"{m.Name} (ID: {m.ID}): {axisAngle:F1}° to {m.Axis}-axis";
@@ -2967,19 +4941,26 @@ namespace kinectProject
         {
             measurementsList.Items.Clear();
 
-            // Group measurements by ID to avoid duplicates
-            var groupedMeasurements = measurements
-                .GroupBy(m => m.ID)
-                .Select(g => g.First())
-                .OrderBy(m => m.ID)
+            // Sort measurements: regular measurements first, then intersection angles
+            var sortedMeasurements = measurements
+                .OrderBy(m => !m.AngleValue.HasValue) // Regular measurements first
+                .ThenBy(m => m.ID)
                 .ToList();
 
-            foreach (var m in groupedMeasurements)
+            foreach (var m in sortedMeasurements)
             {
+                string typeText = GetMeasurementTypeString(m.Type);
+
+                // Special display for intersection angles
+                if (m.Type == MeasurementType.Angle && m.AngleValue.HasValue)
+                {
+                    typeText = "Intersection Angle";
+                }
+
                 string valueText = GetMeasurementValueText(m);
 
                 ListViewItem item = new ListViewItem(m.ID.ToString());
-                item.SubItems.Add(GetMeasurementTypeString(m.Type));
+                item.SubItems.Add(typeText);
                 item.SubItems.Add(m.Name);
                 item.SubItems.Add(valueText);
 
@@ -2990,14 +4971,21 @@ namespace kinectProject
                 }
                 else
                 {
-                    item.BackColor = measurementsList.BackColor;
+                    // Color code intersection angles differently
+                    if (m.Type == MeasurementType.Angle && m.AngleValue.HasValue)
+                    {
+                        item.BackColor = Color.FromArgb(255, 240, 245); // Light pink
+                    }
+                    else
+                    {
+                        item.BackColor = measurementsList.BackColor;
+                    }
                     item.ForeColor = measurementsList.ForeColor;
                 }
 
                 measurementsList.Items.Add(item);
             }
         }
-
         private string GetMeasurementTypeString(MeasurementType type)
         {
             switch (type)
@@ -3036,8 +5024,24 @@ namespace kinectProject
                     return $"{refPixels:F1} px ({refUnits:F2} cm)";
 
                 case MeasurementType.Angle:
-                    double angle = CalculateAngle(m);
-                    return $"{angle:F1}°";
+                    if (m.AngleValue.HasValue)
+                    {
+                        // Intersection angle
+                        if (m.RelatedLineIDs.Count >= 2)
+                        {
+                            return $"{m.AngleValue:F1}° (L{m.RelatedLineIDs[0]}-L{m.RelatedLineIDs[1]})";
+                        }
+                        else
+                        {
+                            return $"{m.AngleValue:F1}°";
+                        }
+                    }
+                    else
+                    {
+                        // Regular angle
+                        double angle = CalculateAngle(m);
+                        return $"{angle:F1}°";
+                    }
 
                 case MeasurementType.AngleWithAxis:
                     double axisAngle = CalculateAngleWithAxis(m);
@@ -3072,6 +5076,8 @@ namespace kinectProject
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
+
+            FindAllIntersections();
 
             using (SaveFileDialog saveDialog = new SaveFileDialog())
             {
@@ -3109,107 +5115,85 @@ namespace kinectProject
             PdfWriter writer = PdfWriter.GetInstance(document, new FileStream(filePath, FileMode.Create));
             document.Open();
 
-            // Add title
+            // ===== Title =====
             iTextSharp.text.Font titleFont = FontFactory.GetFont(FontFactory.HELVETICA_BOLD, 18, BaseColor.DARK_GRAY);
-            Paragraph title = new Paragraph("Body Measurement Analysis Report", titleFont);
-            title.Alignment = Element.ALIGN_CENTER;
-            title.SpacingAfter = 20;
+            Paragraph title = new Paragraph("Body Measurement Analysis Report", titleFont)
+            {
+                Alignment = Element.ALIGN_CENTER,
+                SpacingAfter = 20
+            };
             document.Add(title);
 
-            // Add creation date
+            // ===== Date =====
             iTextSharp.text.Font dateFont = FontFactory.GetFont(FontFactory.HELVETICA, 10, BaseColor.GRAY);
-            Paragraph date = new Paragraph($"Generated on: {DateTime.Now:yyyy-MM-dd HH:mm}", dateFont);
-            date.Alignment = Element.ALIGN_CENTER;
-            date.SpacingAfter = 20;
+            Paragraph date = new Paragraph($"Generated on: {DateTime.Now:yyyy-MM-dd HH:mm}", dateFont)
+            {
+                Alignment = Element.ALIGN_CENTER,
+                SpacingAfter = 20
+            };
             document.Add(date);
 
-            // Prepare the image first to calculate its height
-            iTextSharp.text.Image pdfImage = null;
+            // ===== Image with Measurements =====
             if (originalImage != null)
             {
                 try
                 {
-                    // Create a bitmap with the original image dimensions
                     using (Bitmap bmp = new Bitmap(originalImage.Width, originalImage.Height))
+                    using (Graphics g = Graphics.FromImage(bmp))
                     {
-                        using (Graphics g = Graphics.FromImage(bmp))
-                        {
-                            g.Clear(Color.White);
-                            g.DrawImage(originalImage, 0, 0, originalImage.Width, originalImage.Height);
+                        g.Clear(Color.White);
+                        g.DrawImage(originalImage, 0, 0, originalImage.Width, originalImage.Height);
 
-                            // Draw measurements on the image
-                            foreach (var m in measurements)
-                            {
-                                DrawMeasurementOnBitmap(g, m);
-                            }
-                        }
+                        foreach (var m in measurements)
+                            DrawMeasurementOnBitmap(g, m);
 
-                        // Save to temporary file
                         string tempImagePath = Path.GetTempFileName() + ".png";
                         bmp.Save(tempImagePath, System.Drawing.Imaging.ImageFormat.Png);
 
-                        // Create PDF image and scale it
-                        pdfImage = iTextSharp.text.Image.GetInstance(tempImagePath);
+                        iTextSharp.text.Image pdfImage = iTextSharp.text.Image.GetInstance(tempImagePath);
                         pdfImage.Alignment = Element.ALIGN_CENTER;
 
-                        // Scale image to fit page width while maintaining aspect ratio
-                        float maxWidth = document.PageSize.Width - 72; // 1 inch margins
-                        float maxHeight = document.PageSize.Height - 200; // Leave more space
+                        float maxWidth = document.PageSize.Width - 72;
+                        float maxHeight = document.PageSize.Height - 200;
+                        pdfImage.ScaleToFit(maxWidth, maxHeight);
 
-                        if (pdfImage.Width > maxWidth || pdfImage.Height > maxHeight)
-                        {
-                            pdfImage.ScaleToFit(maxWidth, maxHeight);
-                        }
-
-                        // Check if there's enough space on current page for the image
-                        float imageHeight = pdfImage.ScaledHeight + 40; // Add some margin
-                        float currentVerticalPosition = writer.GetVerticalPosition(false);
-
-                        if (currentVerticalPosition - imageHeight < document.BottomMargin)
-                        {
-                            // Not enough space - add new page
+                        if (writer.GetVerticalPosition(false) - pdfImage.ScaledHeight < document.BottomMargin)
                             document.NewPage();
-                        }
 
                         pdfImage.SpacingAfter = 20;
                         document.Add(pdfImage);
 
-                        // Clean up temporary file
                         File.Delete(tempImagePath);
                     }
                 }
                 catch (Exception ex)
                 {
-                    document.Add(new Paragraph($"Error adding image to PDF: {ex.Message}"));
+                    document.Add(new Paragraph($"Error adding image: {ex.Message}"));
                 }
             }
 
-            // Add measurements table if there are any
+            // ===== Measurements Table =====
             if (measurements.Any())
             {
-                // Check if we need a new page for the table
-                float tableEstimatedHeight = measurements.Count * 20 + 50; // Estimate table height
-                float currentVerticalPosition = writer.GetVerticalPosition(false);
-
-                if (currentVerticalPosition - tableEstimatedHeight < document.BottomMargin + 100)
-                {
-                    // Not enough space - add new page
+                float estimatedHeight = measurements.Count * 20 + 50;
+                if (writer.GetVerticalPosition(false) - estimatedHeight < document.BottomMargin + 100)
                     document.NewPage();
-                }
 
-                // Add measurements header
-                iTextSharp.text.Font tableHeaderFont = FontFactory.GetFont(FontFactory.HELVETICA_BOLD, 12, BaseColor.DARK_GRAY);
-                Paragraph measurementsHeader = new Paragraph("Measurement Summary", tableHeaderFont);
-                measurementsHeader.SpacingBefore = 10;
-                measurementsHeader.SpacingAfter = 10;
+                Paragraph measurementsHeader = new Paragraph(
+                    "Measurement Summary",
+                    FontFactory.GetFont(FontFactory.HELVETICA_BOLD, 12, BaseColor.DARK_GRAY))
+                {
+                    SpacingBefore = 10,
+                    SpacingAfter = 10
+                };
                 document.Add(measurementsHeader);
 
-                // Create measurements table with ID column
-                PdfPTable table = new PdfPTable(5);
-                table.WidthPercentage = 100;
+                PdfPTable table = new PdfPTable(5)
+                {
+                    WidthPercentage = 100
+                };
                 table.SetWidths(new float[] { 1, 2, 3, 2, 3 });
 
-                // Add table headers
                 iTextSharp.text.Font headerFont = FontFactory.GetFont(FontFactory.HELVETICA_BOLD, 10, BaseColor.WHITE);
                 AddTableHeaderCell(table, "ID", headerFont, BaseColor.DARK_GRAY);
                 AddTableHeaderCell(table, "Type", headerFont, BaseColor.DARK_GRAY);
@@ -3217,55 +5201,176 @@ namespace kinectProject
                 AddTableHeaderCell(table, "Pixel Value", headerFont, BaseColor.DARK_GRAY);
                 AddTableHeaderCell(table, "Real Value", headerFont, BaseColor.DARK_GRAY);
 
-                // Group measurements by ID to avoid duplicates
                 var groupedMeasurements = measurements
                     .GroupBy(m => m.ID)
                     .Select(g => g.First())
-                    .OrderBy(m => m.ID)
-                    .ToList();
+                    .OrderBy(m => m.ID);
 
-                // Add measurement rows
-                iTextSharp.text.Font cellFont = FontFactory.GetFont(FontFactory.HELVETICA, 9, BaseColor.BLACK);
+                iTextSharp.text.Font cellFont = FontFactory.GetFont(FontFactory.HELVETICA, 9);
                 foreach (var m in groupedMeasurements)
-                {
                     AddMeasurementToTable(table, m, cellFont);
-                }
 
                 document.Add(table);
             }
             else
             {
-                Paragraph noMeasurements = new Paragraph("No measurements recorded.",
-                    FontFactory.GetFont(FontFactory.HELVETICA_OBLIQUE, 10, BaseColor.GRAY));
-                noMeasurements.SpacingBefore = 10;
-                document.Add(noMeasurements);
+                document.Add(new Paragraph(
+                    "No measurements recorded.",
+                    FontFactory.GetFont(FontFactory.HELVETICA_OBLIQUE, 10, BaseColor.GRAY)));
             }
 
-            // Add reference scale information if available
+            // ===== Intersection Points Analysis =====
+            if (intersectionPoints != null && intersectionPoints.Count > 0)
+            {
+                if (writer.GetVerticalPosition(false) < document.BottomMargin + 100)
+                    document.NewPage();
+
+                Paragraph intersectionHeader = new Paragraph(
+                    "Intersection Points Analysis",
+                    FontFactory.GetFont(FontFactory.HELVETICA_BOLD, 12, BaseColor.DARK_GRAY))
+                {
+                    SpacingBefore = 20,
+                    SpacingAfter = 10
+                };
+                document.Add(intersectionHeader);
+
+                PdfPTable intersectionTable = new PdfPTable(4)
+                {
+                    WidthPercentage = 100
+                };
+                intersectionTable.SetWidths(new float[] { 1, 2, 3, 4 });
+
+                iTextSharp.text.Font intHeaderFont =
+                    FontFactory.GetFont(FontFactory.HELVETICA_BOLD, 10, BaseColor.WHITE);
+
+                AddTableHeaderCell(intersectionTable, "ID", intHeaderFont, BaseColor.DARK_GRAY);
+                AddTableHeaderCell(intersectionTable, "Type", intHeaderFont, BaseColor.DARK_GRAY);
+                AddTableHeaderCell(intersectionTable, "Coordinates", intHeaderFont, BaseColor.DARK_GRAY);
+                AddTableHeaderCell(intersectionTable, "Lines & Angles", intHeaderFont, BaseColor.DARK_GRAY);
+
+                iTextSharp.text.Font intCellFont =
+                    FontFactory.GetFont(FontFactory.HELVETICA, 9);
+
+                foreach (var ip in intersectionPoints.OrderBy(p => p.ID))
+                    AddIntersectionToTable(intersectionTable, ip, intCellFont);
+
+                document.Add(intersectionTable);
+
+                if (writer.GetVerticalPosition(false) < document.BottomMargin + 200)
+                    document.NewPage();
+
+                Paragraph detailHeader = new Paragraph(
+                    "Detailed Angle Analysis",
+                    FontFactory.GetFont(FontFactory.HELVETICA_BOLD, 11, BaseColor.DARK_GRAY))
+                {
+                    SpacingBefore = 15,
+                    SpacingAfter = 10
+                };
+                document.Add(detailHeader);
+
+                Paragraph detailContent = new Paragraph(
+                    GetIntersectionDataForPdf(),
+                    FontFactory.GetFont(FontFactory.HELVETICA, 10))
+                {
+                    SpacingAfter = 15
+                };
+                document.Add(detailContent);
+
+              //  AddIntersectionStatistics(document);
+            }
+
+            // ===== Reference Scale =====
             if (isReferenceSet)
             {
-                // Check if we need a new page
-                float currentVerticalPosition = writer.GetVerticalPosition(false);
-                if (currentVerticalPosition < document.BottomMargin + 50)
-                {
+                if (writer.GetVerticalPosition(false) < document.BottomMargin + 50)
                     document.NewPage();
-                }
 
-                Paragraph scaleInfo = new Paragraph($"Reference Scale: 1 cm = {pixelToRealRatio:F2} pixels",
-                    FontFactory.GetFont(FontFactory.HELVETICA, 9, BaseColor.GRAY));
-                scaleInfo.SpacingBefore = 10;
-                document.Add(scaleInfo);
+                document.Add(new Paragraph(
+                    $"Reference Scale: 1 cm = {pixelToRealRatio:F2} pixels",
+                    FontFactory.GetFont(FontFactory.HELVETICA, 9, BaseColor.GRAY)));
             }
 
-            // Add footer
-            Paragraph footer = new Paragraph("Generated by Body Measurement Analysis Tool",
-                FontFactory.GetFont(FontFactory.HELVETICA_OBLIQUE, 8, BaseColor.LIGHT_GRAY));
-            footer.Alignment = Element.ALIGN_RIGHT;
-            footer.SpacingBefore = 20;
+            // ===== Footer =====
+            Paragraph footer = new Paragraph(
+                "Generated by Body Measurement Analysis Tool",
+                FontFactory.GetFont(FontFactory.HELVETICA_OBLIQUE, 8, BaseColor.LIGHT_GRAY))
+            {
+                Alignment = Element.ALIGN_RIGHT,
+                SpacingBefore = 20
+            };
             document.Add(footer);
 
             document.Close();
         }
+
+
+        private void AddIntersectionToTable(PdfPTable table, IntersectionPoint ip, iTextSharp.text.Font font)
+        {
+            // ID column
+            table.AddCell(new PdfPCell(new Phrase($"P{ip.ID}", font))
+            {
+                Padding = 5,
+                HorizontalAlignment = Element.ALIGN_CENTER
+            });
+
+            // Type column
+            table.AddCell(new PdfPCell(new Phrase(ip.Type.ToString(), font))
+            {
+                Padding = 5
+            });
+
+            // Coordinates column
+            table.AddCell(new PdfPCell(new Phrase($"({ip.Location.X}, {ip.Location.Y})", font))
+            {
+                Padding = 5
+            });
+
+            // Lines & Angles column
+            string linesText = $"Lines: {string.Join(", ", ip.LineIDs.Select(id => $"L{id}"))}";
+
+            StringBuilder anglesText = new StringBuilder();
+            if (ip.Angles.Count > 0)
+            {
+                // Group angles
+                var angleGroups = ip.Angles
+                    .GroupBy(a => new { Line1 = Math.Min(a.Item1, a.Item2), Line2 = Math.Max(a.Item1, a.Item2) })
+                    .Select(g => new
+                    {
+                        Line1 = g.Key.Line1,
+                        Line2 = g.Key.Line2,
+                        Angles = g.Select(x => x.Item3).Distinct().OrderBy(a => a).ToList()
+                    });
+
+                foreach (var group in angleGroups)
+                {
+                    if (group.Angles.Count == 2)
+                    {
+                        anglesText.AppendLine($"L{group.Line1}-L{group.Line2}: {group.Angles[0]:F1}° & {group.Angles[1]:F1}°");
+                    }
+                    else if (group.Angles.Count == 1)
+                    {
+                        anglesText.AppendLine($"L{group.Line1}-L{group.Line2}: {group.Angles[0]:F1}°");
+                    }
+                }
+            }
+
+            Phrase cellContent = new Phrase();
+            cellContent.Add(new Chunk(linesText + "\n", font));
+            if (anglesText.Length > 0)
+            {
+                cellContent.Add(new Chunk(anglesText.ToString(), font));
+            }
+
+            table.AddCell(new PdfPCell(cellContent)
+            {
+                Padding = 5,
+                PaddingTop = 8,
+                PaddingBottom = 8
+            });
+        }
+
+
+
 
         private void DrawMeasurementOnBitmap(Graphics g, Measurement m)
         {
@@ -3463,6 +5568,7 @@ namespace kinectProject
             }
         }
     }
+
 
     #region Dialog Classes
 

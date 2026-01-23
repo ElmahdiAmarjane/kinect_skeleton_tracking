@@ -1314,7 +1314,7 @@ namespace KinectProject
             }
         }
 
-        private void GeneratePatientReport(PdfInputForm form, System.Drawing.Image imageToInclude)
+        private void GeneratePatientReport(PdfInputForm form, System.Drawing.Image depthImageToInclude)
         {
             try
             {
@@ -1370,53 +1370,112 @@ namespace KinectProject
                 gfx.DrawString("Antécédents médicaux :", labelFont, XBrushes.Black, margin, yPoint);
                 yPoint += 20;
 
-              
-
                 XTextFormatter tf = new XTextFormatter(gfx);
                 XRect historyRect = new XRect(margin, yPoint, page.Width - 2 * margin, 80);
                 tf.DrawString(form.MedicalHistory, valueFont, XBrushes.Black, historyRect, XStringFormats.TopLeft);
                 yPoint += 100;
 
-                gfx.DrawString("Resultats Analyse :", labelFont, XBrushes.Black, margin, yPoint);
+                gfx.DrawString("Résultats Analyse :", labelFont, XBrushes.Black, margin, yPoint);
                 yPoint += 20;
 
-                //gfx.DrawString($"Angle de Cobb V2 : {cobbAngleV2:F1}°", valueFont, XBrushes.Black, margin, yPoint);
-                //yPoint += 20;
+                // 🖼️ Image couleur normale du patient
+                CheckPageOverflow(200);
+                gfx.DrawString("Image couleur du patient", labelFont, XBrushes.Black, margin, yPoint);
+                yPoint += 20;
 
-                // 🖼️ Première image
-                if (imageToInclude != null)
+                // Récupérer l'image couleur actuelle
+                System.Drawing.Image colorImage = normalPictureBox?.Image;
+                if (colorImage != null)
                 {
-                    CheckPageOverflow(300); // estimate image height
-                    yPoint = DrawImage(gfx, imageToInclude, page, margin, yPoint);
+                    CheckPageOverflow(300);
+                    yPoint = DrawImage(gfx, colorImage, page, margin, yPoint);
+                }
+                else
+                {
+                    gfx.DrawString("Aucune image couleur disponible", valueFont, XBrushes.Gray, margin, yPoint);
+                    yPoint += 30;
                 }
 
-                // 🖼️ Texte avant spline
-                CheckPageOverflow(40);
-                gfx.DrawString("Courbe spline (courbure du dos)", labelFont, XBrushes.Black, margin, yPoint);
+                // 🖼️ Image de profondeur
+                if (depthImageToInclude != null)
+                {
+                    CheckPageOverflow(200);
+                    gfx.DrawString("Image de profondeur (analyse thermique)", labelFont, XBrushes.Black, margin, yPoint);
+                    yPoint += 20;
+
+                    CheckPageOverflow(300);
+                    yPoint = DrawImage(gfx, depthImageToInclude, page, margin, yPoint);
+                }
+
+                // 🖼️ Courbe sagittale
+                gfx.DrawString("Courbe sagittale du dos", labelFont, XBrushes.Black, margin, yPoint);
                 yPoint += 20;
 
-                // 🖼️ Deuxième image spline
+                // Générer l'image de la courbe
                 System.Drawing.Image splineImg = GenerateSpineCurveImageForPdf(500, 600);
                 if (splineImg != null)
                 {
                     CheckPageOverflow(300);
                     yPoint = DrawImage(gfx, splineImg, page, margin, yPoint);
+
+                    // Ajouter des informations sur la courbe
+                    CheckPageOverflow(50);
+                    if (maxZIndex >= 0 && lastSmoothedSpinePoints != null &&
+                        maxZIndex < lastSmoothedSpinePoints.Count)
+                    {
+                        float deepestZ = lastSmoothedSpinePoints[maxZIndex].X;
+                        gfx.DrawString($"Point de courbure maximal : {deepestZ:F0} mm",
+                                     valueFont, XBrushes.Black, margin, yPoint);
+                        yPoint += 20;
+                    }
+
+                    if (spineAngle != 0)
+                    {
+                        gfx.DrawString($"Angle sagittal du tronc : {spineAngle:F2}°",
+                                     valueFont, XBrushes.Black, margin, yPoint);
+                        yPoint += 20;
+                    }
+                }
+                else
+                {
+                    gfx.DrawString("Aucune courbe disponible", valueFont, XBrushes.Gray, margin, yPoint);
+                    yPoint += 30;
                 }
 
+                // 📝 Pied de page avec date
+                CheckPageOverflow(50);
+                gfx.DrawString($"Rapport généré le {DateTime.Now:dd/MM/yyyy à HH:mm}",
+                              new XFont("Segoe UI", 10, XFontStyle.Italic),
+                              XBrushes.Gray,
+                              new XRect(margin, yPoint, page.Width - 2 * margin, 30),
+                              XStringFormats.Center);
+
                 // 📝 Sauvegarde
-                string filename = $"rapport_{form.PatientName}_{DateTime.Now:yyyyMMddHHmmss}.pdf";
+                string safeFileName = form.PatientName.Replace(" ", "_")
+                                                   .Replace("/", "-")
+                                                   .Replace("\\", "-");
+                string filename = $"rapport_{safeFileName}_{DateTime.Now:yyyyMMddHHmmss}.pdf";
                 string fullPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), filename);
                 document.Save(fullPath);
                 document.Close();
 
-                MessageBox.Show($"PDF généré avec succès à l’emplacement :\n\n{fullPath}", "Succès", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                // Optionnel : ouvrir le PDF automatiquement
+                if (MessageBox.Show($"PDF généré avec succès à l'emplacement :\n\n{fullPath}\n\nVoulez-vous ouvrir le document ?",
+                                  "Succès",
+                                  MessageBoxButtons.YesNo,
+                                  MessageBoxIcon.Information) == DialogResult.Yes)
+                {
+                    System.Diagnostics.Process.Start(fullPath);
+                }
             }
             catch (Exception ex)
             {
-                MessageBox.Show("Erreur lors de la génération du PDF :\n" + ex.Message, "Erreur", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show("Erreur lors de la génération du PDF :\n" + ex.Message,
+                              "Erreur",
+                              MessageBoxButtons.OK,
+                              MessageBoxIcon.Error);
             }
         }
-
         private double DrawImage(XGraphics gfx, System.Drawing.Image image, PdfPage page, double margin, double yPoint)
         {
             using (var ms = new MemoryStream())
