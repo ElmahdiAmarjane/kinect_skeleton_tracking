@@ -207,6 +207,13 @@ namespace kinectProject
         // Dans la section des champs privés
         private bool autoRenameEnabled = true; // Par défaut activé
 
+        // AJOUTER ces variables pour gérer la création de lignes entre points :
+        private Point? selectedPointForLine = null;
+        private bool isCreatingLineBetweenPoints = false;
+
+        // AJOUTER cette variable pour la surbrillance :
+        private Point? highlightedPoint = null;
+
         public BodyPictureAnalyzer()
         {
             InitializeComponents();
@@ -284,6 +291,7 @@ namespace kinectProject
             AddToolSeparator();
             AddToolButton("🎯 Detect Points", BtnDetectPoints_Click);
 
+            AddToolButton("📏 Connect Points", BtnConnectPoints_Click);
 
 
             // Drawing panel - Using DoubleBufferedPanel for smooth zoom
@@ -519,8 +527,10 @@ namespace kinectProject
                     DrawStickerMarker(debug, sticker, id);
                 }
 
+                CreateMeasurementsFromDetectedPoints();
+
                 // Sauvegarder et montrer
-                debug.Save("strict_sticker_detection.png");
+              //  debug.Save("strict_sticker_detection.png");
 
                 MessageBox.Show($"Autocollants détectés: {detectedPoints.Count}\n" +
                                $"Image sauvegardée: strict_sticker_detection.png",
@@ -713,14 +723,32 @@ namespace kinectProject
         }
 
 
+        private void BtnConnectPoints_Click(object sender, EventArgs e)
+        {
+            if (detectedPoints.Count == 0)
+            {
+                MessageBox.Show("Aucun point détecté. Utilisez d'abord la détection de points.",
+                               "Information", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            // Activer le mode de connexion
+            isCreatingLineBetweenPoints = true;
+            selectedPointForLine = null;
+
+            UpdateStatus("Mode Connexion: Cliquez sur le premier point, puis sur le second");
+            drawingPanel.Cursor = Cursors.Hand;
+            drawingPanel.Invalidate();
+        }
+
         ///////////
 
 
- 
-  
-   
 
-      
+
+
+
+
 
         private class ConnectedComponent
         {
@@ -750,10 +778,10 @@ namespace kinectProject
 
 
 
-       
 
 
-     
+
+
 
 
         ///////////
@@ -787,12 +815,10 @@ namespace kinectProject
             }
 
             UpdateMeasurementsList();
-            UpdateStatus($"Created {detectedPoints.Count} point measurements.");
+            UpdateStatus($"Créé {detectedPoints.Count} points de mesure.");
         }
 
- 
-    
- 
+
         private int Find(int[] parent, int x)
         {
             if (parent[x] != x)
@@ -2626,11 +2652,76 @@ namespace kinectProject
                 // Error handling...
             }
         }
-        ////////
 
+        // CRÉER la fonction CreateLineBetweenPoints :
+        private void CreateLineBetweenPoints(Point point1, DetectedPoint point2)
+        {
+            // Trouver les IDs des points dans les mesures
+            int point1Id = 0;
+            int point2Id = point2.ID;
+
+            // Chercher point1 dans les mesures
+            foreach (var measurement in measurements)
+            {
+                if (measurement.Type == MeasurementType.Point &&
+                    measurement.Start == point1)
+                {
+                    point1Id = measurement.ID;
+                    break;
+                }
+            }
+
+            // Si point1 vient d'un point détecté, chercher dans detectedPoints
+            if (point1Id == 0)
+            {
+                foreach (var point in detectedPoints)
+                {
+                    if (point.Location == point1)
+                    {
+                        point1Id = point.ID;
+                        break;
+                    }
+                }
+            }
+
+            // Créer le nom de la ligne
+            string lineName = $"L{measurementCounter++}";
+
+            // Demander un nom personnalisé (optionnel)
+            using (var renameDialog = new CustomRenameDialog(lineName,
+                $"Créer une ligne entre le point {point1Id} et le point {point2Id}"))
+            {
+                if (renameDialog.ShowDialog() == DialogResult.OK)
+                {
+                    lineName = string.IsNullOrWhiteSpace(renameDialog.NewName) ?
+                              lineName : renameDialog.NewName.Trim();
+                }
+            }
+
+            // Créer la mesure de ligne
+            Measurement lineMeasurement = new Measurement(
+                point1,
+                point2.Location,
+                lineName,
+                MeasurementType.Line,
+                idCounter++);
+
+            measurements.Add(lineMeasurement);
+
+            // Recalculer les intersections
+            FindAllIntersections();
+
+            UpdateMeasurementsList();
+            drawingPanel.Invalidate();
+
+            UpdateStatus($"Ligne créée: {lineName} entre P{point1Id} et P{point2Id}");
+        }
+
+        ////////
         private void DrawDetectedPoints(Graphics g)
         {
-            if (detectedPoints.Count == 0) return;
+            if (detectedPoints == null || detectedPoints.Count == 0)
+                return;
 
             g.Transform = transformMatrix;
 
@@ -2639,21 +2730,51 @@ namespace kinectProject
                 Color pointColor = colorMap[point.Color];
                 int pointSize = Math.Max(3, (int)(point.Radius / zoomFactor));
 
+                // Vérifier si ce point est surligné
+                bool isHighlighted =
+                    highlightedPoint.HasValue &&
+                    point.Location == highlightedPoint.Value;
+
+                // --- SURBRILLANCE ---
+                if (isHighlighted)
+                {
+                    using (Pen highlightPen = new Pen(Color.Yellow, 2))
+                    {
+                        g.DrawEllipse(
+                            highlightPen,
+                            point.Location.X - pointSize - 5,
+                            point.Location.Y - pointSize - 5,
+                            (pointSize + 5) * 2,
+                            (pointSize + 5) * 2
+                        );
+                    }
+                }
+
+                // --- DESSIN DU POINT ---
                 using (Brush brush = new SolidBrush(pointColor))
                 using (Pen pen = new Pen(Color.Black, 1))
                 {
-                    // Draw point
-                    g.FillEllipse(brush,
+                    g.FillEllipse(
+                        brush,
                         point.Location.X - pointSize / 2,
                         point.Location.Y - pointSize / 2,
-                        pointSize, pointSize);
-                    g.DrawEllipse(pen,
-                        point.Location.X - pointSize / 2,
-                        point.Location.Y - pointSize / 2,
-                        pointSize, pointSize);
+                        pointSize,
+                        pointSize
+                    );
 
-                    // Draw point ID
-                    using (System.Drawing.Font font = new System.Drawing.Font("Arial", Math.Max(8, 10 / zoomFactor), FontStyle.Bold))
+                    g.DrawEllipse(
+                        pen,
+                        point.Location.X - pointSize / 2,
+                        point.Location.Y - pointSize / 2,
+                        pointSize,
+                        pointSize
+                    );
+
+                    // --- DESSIN DE L'ID ---
+                    using (System.Drawing.Font font = new System.Drawing.Font(
+                        "Arial",
+                        Math.Max(8, 10 / zoomFactor),
+                        FontStyle.Bold))
                     using (Brush textBrush = new SolidBrush(Color.White))
                     using (Brush bgBrush = new SolidBrush(Color.FromArgb(200, Color.Black)))
                     {
@@ -2664,17 +2785,23 @@ namespace kinectProject
                             point.Location.X - textSize.Width / 2,
                             point.Location.Y + pointSize + 2,
                             textSize.Width + 4,
-                            textSize.Height);
+                            textSize.Height
+                        );
 
                         g.FillRectangle(bgBrush, textRect);
-                        g.DrawString(idText, font, textBrush,
+
+                        g.DrawString(
+                            idText,
+                            font,
+                            textBrush,
                             point.Location.X - textSize.Width / 2 + 2,
-                            point.Location.Y + pointSize + 4);
+                            point.Location.Y + pointSize + 4
+                        );
                     }
                 }
             }
 
-            // Draw body landmarks if any
+            // --- LANDMARKS CORPORELS ---
             DrawBodyLandmarks(g);
         }
 
@@ -2727,81 +2854,130 @@ namespace kinectProject
             Point currentPos = drawingPanel.PointToClient(Cursor.Position);
             PointF imageCurrentPos = TransformPointToImage(currentPos);
 
-            // Validate points before using them
+            // Validation
             if (float.IsNaN(imageCurrentPos.X) || float.IsNaN(imageCurrentPos.Y))
                 return;
 
-            using (Pen tempPen = new Pen(Color.Yellow, 2) { DashStyle = DashStyle.Dash })
+            Point imagePoint = new Point(
+                (int)imageCurrentPos.X,
+                (int)imageCurrentPos.Y);
+
+            // =========================================================
+            // INDICATEUR VISUEL : CONNEXION ENTRE DEUX POINTS
+            // =========================================================
+            if (isCreatingLineBetweenPoints && selectedPointForLine.HasValue)
+            {
+                using (Pen connectionPen = new Pen(Color.Cyan, 2)
+                {
+                    DashStyle = DashStyle.Dash
+                })
+                {
+                    g.DrawLine(connectionPen,
+                               selectedPointForLine.Value,
+                               imagePoint);
+                }
+            }
+
+            // =========================================================
+            // PREVIEW DES OUTILS ACTIFS
+            // =========================================================
+            using (Pen tempPen = new Pen(Color.Yellow, 2)
+            {
+                DashStyle = DashStyle.Dash
+            })
             {
                 if (currentTool == ToolMode.Angle)
                 {
                     if (angleVertex.HasValue && angleFirstPoint.HasValue)
                     {
-                        // Validate all points
-                        if (IsValidPoint(angleVertex.Value) && IsValidPoint(angleFirstPoint.Value))
+                        if (IsValidPoint(angleVertex.Value) &&
+                            IsValidPoint(angleFirstPoint.Value))
                         {
                             g.DrawLine(tempPen, angleVertex.Value, angleFirstPoint.Value);
-                            g.DrawLine(tempPen, angleVertex.Value, imageCurrentPos);
-                            DrawAngleArcPreview(g, angleVertex.Value, angleFirstPoint.Value, imageCurrentPos);
+                            g.DrawLine(tempPen, angleVertex.Value, imagePoint);
+
+                            DrawAngleArcPreview(
+                                g,
+                                angleVertex.Value,
+                                angleFirstPoint.Value,
+                                imagePoint);
                         }
                     }
                     else if (angleVertex.HasValue && IsValidPoint(angleVertex.Value))
                     {
-                        g.DrawLine(tempPen, angleVertex.Value, imageCurrentPos);
+                        g.DrawLine(tempPen, angleVertex.Value, imagePoint);
                     }
                 }
                 else if (currentTool == ToolMode.AngleWithAxis)
                 {
-                    if (currentStartPoint.HasValue)
+                    if (currentStartPoint.HasValue &&
+                        IsValidPoint(currentStartPoint.Value))
                     {
-                        g.DrawLine(tempPen, currentStartPoint.Value, imageCurrentPos);
+                        g.DrawLine(tempPen, currentStartPoint.Value, imagePoint);
                     }
                 }
-                else if (currentStartPoint.HasValue && IsValidPoint(currentStartPoint.Value))
+                else if (currentStartPoint.HasValue &&
+                         IsValidPoint(currentStartPoint.Value))
                 {
-                    g.DrawLine(tempPen, currentStartPoint.Value, imageCurrentPos);
+                    g.DrawLine(tempPen, currentStartPoint.Value, imagePoint);
 
-                    // Draw helper for 90° angles
-                    if (currentTool == ToolMode.Line || currentTool == ToolMode.Distance)
+                    // Aide visuelle pour angles droits
+                    if (currentTool == ToolMode.Line ||
+                        currentTool == ToolMode.Distance)
                     {
-                        DrawAngleHelpers(g, currentStartPoint.Value, new Point((int)imageCurrentPos.X, (int)imageCurrentPos.Y));
+                        DrawAngleHelpers(
+                            g,
+                            currentStartPoint.Value,
+                            imagePoint);
                     }
                 }
-                else if (currentTool == ToolMode.Perpendicular && isSelectingBaseLine && selectedLineForPerpendicular.HasValue)
+                else if (currentTool == ToolMode.Perpendicular &&
+                         isSelectingBaseLine &&
+                         selectedLineForPerpendicular.HasValue)
                 {
                     Point foot;
 
-                    if (selectedLineForPerpendicular.Value.Type == MeasurementType.Angle && selectedLineForPerpendicular.Value.Vertex.HasValue)
+                    if (selectedLineForPerpendicular.Value.Type == MeasurementType.Angle &&
+                        selectedLineForPerpendicular.Value.Vertex.HasValue)
                     {
-                        // For angle segments, use vertex and endpoint
                         foot = CalculatePerpendicularFoot(
-                            new Measurement(selectedLineForPerpendicular.Value.Vertex.Value,
-                                          selectedLineForPerpendicular.Value.End,
-                                          "", MeasurementType.Line, 0),
-                            new Point((int)imageCurrentPos.X, (int)imageCurrentPos.Y));
+                            new Measurement(
+                                selectedLineForPerpendicular.Value.Vertex.Value,
+                                selectedLineForPerpendicular.Value.End,
+                                "",
+                                MeasurementType.Line,
+                                0),
+                            imagePoint);
                     }
                     else
                     {
-                        // For regular lines
-                        foot = CalculatePerpendicularFoot(selectedLineForPerpendicular.Value,
-                                                        new Point((int)imageCurrentPos.X, (int)imageCurrentPos.Y));
+                        foot = CalculatePerpendicularFoot(
+                            selectedLineForPerpendicular.Value,
+                            imagePoint);
                     }
 
                     if (IsValidPoint(foot))
                     {
-                        using (Pen previewPen = new Pen(Color.Cyan, 2) { DashStyle = DashStyle.Dash })
+                        using (Pen previewPen = new Pen(Color.Cyan, 2)
                         {
-                            g.DrawLine(previewPen, foot, imageCurrentPos);
+                            DashStyle = DashStyle.Dash
+                        })
+                        {
+                            g.DrawLine(previewPen, foot, imagePoint);
                         }
 
-                        // Draw perpendicular symbol
+                        // Symbole perpendiculaire
                         using (Brush symbolBrush = new SolidBrush(Color.Cyan))
                         {
-                            g.FillRectangle(symbolBrush, foot.X - 3, foot.Y - 3, 6, 6);
+                            g.FillRectangle(
+                                symbolBrush,
+                                foot.X - 3,
+                                foot.Y - 3,
+                                6,
+                                6);
                         }
                     }
                 }
-
             }
         }
 
@@ -2869,26 +3045,25 @@ namespace kinectProject
             // Adjust sizes based on zoom
             int lineWidth = Math.Max(1, (int)((m.IsSelected ? 3 : 2) / zoomFactor));
             int pointSize = Math.Max(3, (int)((m.IsSelected ? 8 : 6) / zoomFactor));
-            float fontSize = Math.Max(6, 9 / zoomFactor);
+
+            // REMOVE: float fontSize = Math.Max(6, 9 / zoomFactor); // Not needed anymore
 
             using (Pen pen = new Pen(color, lineWidth))
             using (Brush brush = new SolidBrush(color))
-            using (System.Drawing.Font font = new System.Drawing.Font("Arial", fontSize, FontStyle.Bold))
-            using (Brush textBrush = new SolidBrush(Color.White))
-            using (Brush bgBrush = new SolidBrush(Color.FromArgb(200, Color.Black)))
             {
                 switch (m.Type)
                 {
                     case MeasurementType.Point:
                         g.FillEllipse(brush, m.Start.X - pointSize / 2, m.Start.Y - pointSize / 2, pointSize, pointSize);
 
-                        string pointId = m.ID.ToString();
-                        SizeF idSize = g.MeasureString(pointId, font);
-                        RectangleF idRect = new RectangleF(
-                            m.Start.X + 8, m.Start.Y - idSize.Height / 2,
-                            idSize.Width + 4, idSize.Height);
-                        g.FillRectangle(bgBrush, idRect);
-                        g.DrawString(pointId, font, textBrush, m.Start.X + 10, m.Start.Y - idSize.Height / 2);
+                        // REMOVE: All text drawing for points
+                        // string pointId = m.ID.ToString();
+                        // SizeF idSize = g.MeasureString(pointId, font);
+                        // RectangleF idRect = new RectangleF(
+                        //     m.Start.X + 8, m.Start.Y - idSize.Height / 2,
+                        //     idSize.Width + 4, idSize.Height);
+                        // g.FillRectangle(bgBrush, idRect);
+                        // g.DrawString(pointId, font, textBrush, m.Start.X + 10, m.Start.Y - idSize.Height / 2);
                         break;
 
                     case MeasurementType.Line:
@@ -2896,14 +3071,15 @@ namespace kinectProject
                         g.FillEllipse(brush, m.Start.X - pointSize / 2, m.Start.Y - pointSize / 2, pointSize, pointSize);
                         g.FillEllipse(brush, m.End.X - pointSize / 2, m.End.Y - pointSize / 2, pointSize, pointSize);
 
-                        string lineId = m.ID.ToString();
-                        SizeF lineIdSize = g.MeasureString(lineId, font);
-                        PointF lineMidPoint = new PointF((m.Start.X + m.End.X) / 2, (m.Start.Y + m.End.Y) / 2);
-                        RectangleF lineIdRect = new RectangleF(
-                            lineMidPoint.X - lineIdSize.Width / 2, lineMidPoint.Y - lineIdSize.Height - 10,
-                            lineIdSize.Width + 4, lineIdSize.Height);
-                        g.FillRectangle(bgBrush, lineIdRect);
-                        g.DrawString(lineId, font, textBrush, lineMidPoint.X - lineIdSize.Width / 2 + 2, lineMidPoint.Y - lineIdSize.Height - 8);
+                        // REMOVE: All text drawing for lines
+                        // string lineId = m.ID.ToString();
+                        // SizeF lineIdSize = g.MeasureString(lineId, font);
+                        // PointF lineMidPoint = new PointF((m.Start.X + m.End.X) / 2, (m.Start.Y + m.End.Y) / 2);
+                        // RectangleF lineIdRect = new RectangleF(
+                        //     lineMidPoint.X - lineIdSize.Width / 2, lineMidPoint.Y - lineIdSize.Height - 10,
+                        //     lineIdSize.Width + 4, lineIdSize.Height);
+                        // g.FillRectangle(bgBrush, lineIdRect);
+                        // g.DrawString(lineId, font, textBrush, lineMidPoint.X - lineIdSize.Width / 2 + 2, lineMidPoint.Y - lineIdSize.Height - 8);
                         break;
 
                     case MeasurementType.Distance:
@@ -2912,18 +3088,19 @@ namespace kinectProject
                         g.FillEllipse(brush, m.Start.X - pointSize / 2, m.Start.Y - pointSize / 2, pointSize, pointSize);
                         g.FillEllipse(brush, m.End.X - pointSize / 2, m.End.Y - pointSize / 2, pointSize, pointSize);
 
-                        double distance = CalculateDistance(m.Start, m.End);
-                        string distText = m.Type == MeasurementType.ReferenceLine ?
-                            $"{m.ID}: {distance / pixelToRealRatio:F1} cm" :
-                            isReferenceSet ? $"{m.ID}" : $"{m.ID}";
+                        // REMOVE: All text drawing for distance measurements
+                        // double distance = CalculateDistance(m.Start, m.End);
+                        // string distText = m.Type == MeasurementType.ReferenceLine ?
+                        //     $"{m.ID}: {distance / pixelToRealRatio:F1} cm" :
+                        //     isReferenceSet ? $"{m.ID}" : $"{m.ID}";
 
-                        PointF midPoint = new PointF((m.Start.X + m.End.X) / 2, (m.Start.Y + m.End.Y) / 2);
-                        SizeF textSize = g.MeasureString(distText, font);
-                        RectangleF textRect = new RectangleF(
-                            midPoint.X - textSize.Width / 2, midPoint.Y - textSize.Height - 10,
-                            textSize.Width + 4, textSize.Height);
-                        g.FillRectangle(bgBrush, textRect);
-                        g.DrawString(distText, font, textBrush, midPoint.X - textSize.Width / 2 + 2, midPoint.Y - textSize.Height - 8);
+                        // PointF midPoint = new PointF((m.Start.X + m.End.X) / 2, (m.Start.Y + m.End.Y) / 2);
+                        // SizeF textSize = g.MeasureString(distText, font);
+                        // RectangleF textRect = new RectangleF(
+                        //     midPoint.X - textSize.Width / 2, midPoint.Y - textSize.Height - 10,
+                        //     textSize.Width + 4, textSize.Height);
+                        // g.FillRectangle(bgBrush, textRect);
+                        // g.DrawString(distText, font, textBrush, midPoint.X - textSize.Width / 2 + 2, midPoint.Y - textSize.Height - 8);
                         break;
 
                     case MeasurementType.Angle:
@@ -2935,23 +3112,23 @@ namespace kinectProject
                                 // Draw intersection angle point at the vertex
                                 g.FillEllipse(brush, m.Vertex.Value.X - pointSize / 2, m.Vertex.Value.Y - pointSize / 2, pointSize, pointSize);
 
-                                // Draw angle value with special formatting for intersection angles
-                                string angleText = m.AngleValue.Value.ToString("F1") + "°";
-                                if (m.RelatedLineIDs != null && m.RelatedLineIDs.Count >= 2)
-                                {
-                                    angleText = $"∠L{m.RelatedLineIDs[0]}-L{m.RelatedLineIDs[1]}: {angleText}";
-                                }
+                                // REMOVE: All text drawing for intersection angles
+                                // string angleText = m.AngleValue.Value.ToString("F1") + "°";
+                                // if (m.RelatedLineIDs != null && m.RelatedLineIDs.Count >= 2)
+                                // {
+                                //     angleText = $"∠L{m.RelatedLineIDs[0]}-L{m.RelatedLineIDs[1]}: {angleText}";
+                                // }
 
-                                SizeF angleTextSize = g.MeasureString(angleText, font);
-                                RectangleF angleTextRect = new RectangleF(
-                                    m.Vertex.Value.X - angleTextSize.Width / 2,
-                                    m.Vertex.Value.Y - angleTextSize.Height - 20,
-                                    angleTextSize.Width + 4,
-                                    angleTextSize.Height);
-                                g.FillRectangle(bgBrush, angleTextRect);
-                                g.DrawString(angleText, font, textBrush,
-                                    m.Vertex.Value.X - angleTextSize.Width / 2 + 2,
-                                    m.Vertex.Value.Y - angleTextSize.Height - 18);
+                                // SizeF angleTextSize = g.MeasureString(angleText, font);
+                                // RectangleF angleTextRect = new RectangleF(
+                                //     m.Vertex.Value.X - angleTextSize.Width / 2,
+                                //     m.Vertex.Value.Y - angleTextSize.Height - 20,
+                                //     angleTextSize.Width + 4,
+                                //     angleTextSize.Height);
+                                // g.FillRectangle(bgBrush, angleTextRect);
+                                // g.DrawString(angleText, font, textBrush,
+                                //     m.Vertex.Value.X - angleTextSize.Width / 2 + 2,
+                                //     m.Vertex.Value.Y - angleTextSize.Height - 18);
 
                                 // Draw a small arc to indicate it's an angle
                                 using (Pen arcPen = new Pen(Color.FromArgb(150, Color.Orange), 1))
@@ -2973,7 +3150,36 @@ namespace kinectProject
                                 g.FillEllipse(brush, m.Vertex.Value.X - pointSize / 2, m.Vertex.Value.Y - pointSize / 2, pointSize, pointSize);
                                 g.FillEllipse(brush, m.End.X - pointSize / 2, m.End.Y - pointSize / 2, pointSize, pointSize);
 
-                                // Find the other segment that shares the same vertex and ID
+                                // REMOVE: Find the other segment and draw angle value
+                                // Measurement otherSegment = measurements.FirstOrDefault(meas =>
+                                //     meas.Type == MeasurementType.Angle &&
+                                //     meas.Vertex.HasValue &&
+                                //     meas.Vertex.Value == m.Vertex.Value &&
+                                //     meas.ID == m.ID &&
+                                //     meas.End != m.End);
+
+                                // if (otherSegment.Type == MeasurementType.Angle)
+                                // {
+                                //     // Draw angle value at vertex with ID
+                                //     double angle = CalculateAngle(m, otherSegment);
+                                //     string angleText = $"{m.ID}: {angle:F1}°";
+
+                                //     SizeF angleTextSize = g.MeasureString(angleText, font);
+                                //     RectangleF angleTextRect = new RectangleF(
+                                //         m.Vertex.Value.X - angleTextSize.Width / 2,
+                                //         m.Vertex.Value.Y - angleTextSize.Height - 20,
+                                //         angleTextSize.Width + 4,
+                                //         angleTextSize.Height);
+                                //     g.FillRectangle(bgBrush, angleTextRect);
+                                //     g.DrawString(angleText, font, textBrush,
+                                //         m.Vertex.Value.X - angleTextSize.Width / 2 + 2,
+                                //         m.Vertex.Value.Y - angleTextSize.Height - 18);
+
+                                //     // Draw angle arc
+                                //     DrawAngleArc(g, m, otherSegment);
+                                // }
+
+                                // Keep only the visual arc, no text
                                 Measurement otherSegment = measurements.FirstOrDefault(meas =>
                                     meas.Type == MeasurementType.Angle &&
                                     meas.Vertex.HasValue &&
@@ -2983,22 +3189,7 @@ namespace kinectProject
 
                                 if (otherSegment.Type == MeasurementType.Angle)
                                 {
-                                    // Draw angle value at vertex with ID
-                                    double angle = CalculateAngle(m, otherSegment);
-                                    string angleText = $"{m.ID}: {angle:F1}°";
-
-                                    SizeF angleTextSize = g.MeasureString(angleText, font);
-                                    RectangleF angleTextRect = new RectangleF(
-                                        m.Vertex.Value.X - angleTextSize.Width / 2,
-                                        m.Vertex.Value.Y - angleTextSize.Height - 20,
-                                        angleTextSize.Width + 4,
-                                        angleTextSize.Height);
-                                    g.FillRectangle(bgBrush, angleTextRect);
-                                    g.DrawString(angleText, font, textBrush,
-                                        m.Vertex.Value.X - angleTextSize.Width / 2 + 2,
-                                        m.Vertex.Value.Y - angleTextSize.Height - 18);
-
-                                    // Draw angle arc
+                                    // Draw angle arc only, no text
                                     DrawAngleArc(g, m, otherSegment);
                                 }
                             }
@@ -3010,23 +3201,23 @@ namespace kinectProject
                         g.FillEllipse(brush, m.Start.X - pointSize / 2, m.Start.Y - pointSize / 2, pointSize, pointSize);
                         g.FillEllipse(brush, m.End.X - pointSize / 2, m.End.Y - pointSize / 2, pointSize, pointSize);
 
-                        // Draw angle value with ID
-                        double axisAngle = CalculateAngleWithAxis(m);
-                        string axisAngleText = $"{m.ID}: {axisAngle:F1}° to {m.Axis}";
+                        // REMOVE: All text drawing for axis angles
+                        // double axisAngle = CalculateAngleWithAxis(m);
+                        // string axisAngleText = $"{m.ID}: {axisAngle:F1}° to {m.Axis}";
 
-                        SizeF axisTextSize = g.MeasureString(axisAngleText, font);
-                        Point lineMidPoint1 = new Point(
-                            (m.Start.X + m.End.X) / 2,
-                            (m.Start.Y + m.End.Y) / 2);
-                        RectangleF axisTextRect = new RectangleF(
-                            lineMidPoint1.X - axisTextSize.Width / 2,
-                            lineMidPoint1.Y - axisTextSize.Height - 10,
-                            axisTextSize.Width + 4,
-                            axisTextSize.Height);
-                        g.FillRectangle(bgBrush, axisTextRect);
-                        g.DrawString(axisAngleText, font, textBrush,
-                            lineMidPoint1.X - axisTextSize.Width / 2 + 2,
-                            lineMidPoint1.Y - axisTextSize.Height - 8);
+                        // SizeF axisTextSize = g.MeasureString(axisAngleText, font);
+                        // Point lineMidPoint1 = new Point(
+                        //     (m.Start.X + m.End.X) / 2,
+                        //     (m.Start.Y + m.End.Y) / 2);
+                        // RectangleF axisTextRect = new RectangleF(
+                        //     lineMidPoint1.X - axisTextSize.Width / 2,
+                        //     lineMidPoint1.Y - axisTextSize.Height - 10,
+                        //     axisTextSize.Width + 4,
+                        //     axisTextSize.Height);
+                        // g.FillRectangle(bgBrush, axisTextRect);
+                        // g.DrawString(axisAngleText, font, textBrush,
+                        //     lineMidPoint1.X - axisTextSize.Width / 2 + 2,
+                        //     lineMidPoint1.Y - axisTextSize.Height - 8);
 
                         // Draw angle arc relative to axis
                         DrawAxisAngleArc(g, m);
@@ -3049,15 +3240,15 @@ namespace kinectProject
                                 symbolSize * 2);
                         }
 
-                        // Draw ID
-                        string perpId = m.ID.ToString();
-                        SizeF perpTextSize = g.MeasureString(perpId, font);
-                        Point perpMidPoint = new Point((m.Start.X + m.End.X) / 2, (m.Start.Y + m.End.Y) / 2);
-                        RectangleF perpTextRect = new RectangleF(
-                            perpMidPoint.X - perpTextSize.Width / 2, perpMidPoint.Y - perpTextSize.Height - 10,
-                            perpTextSize.Width + 4, perpTextSize.Height);
-                        g.FillRectangle(bgBrush, perpTextRect);
-                        g.DrawString(perpId, font, textBrush, perpMidPoint.X - perpTextSize.Width / 2 + 2, perpMidPoint.Y - perpTextSize.Height - 8);
+                        // REMOVE: All text drawing for perpendicular lines
+                        // string perpId = m.ID.ToString();
+                        // SizeF perpTextSize = g.MeasureString(perpId, font);
+                        // Point perpMidPoint = new Point((m.Start.X + m.End.X) / 2, (m.Start.Y + m.End.Y) / 2);
+                        // RectangleF perpTextRect = new RectangleF(
+                        //     perpMidPoint.X - perpTextSize.Width / 2, perpMidPoint.Y - perpTextSize.Height - 10,
+                        //     perpTextSize.Width + 4, perpTextSize.Height);
+                        // g.FillRectangle(bgBrush, perpTextRect);
+                        // g.DrawString(perpId, font, textBrush, perpMidPoint.X - perpTextSize.Width / 2 + 2, perpMidPoint.Y - perpTextSize.Height - 8);
                         break;
 
                     default:
@@ -3066,6 +3257,7 @@ namespace kinectProject
                 }
             }
         }
+
 
         private void DrawHoverLabel(Graphics g, Point point, string text)
         {
@@ -3459,6 +3651,25 @@ namespace kinectProject
             PointF imagePointF = TransformPointToImage(e.Location);
             Point imagePoint = new Point((int)imagePointF.X, (int)imagePointF.Y);
 
+            // 1. D'abord vérifier si on est en mode création de ligne entre points
+            if (isCreatingLineBetweenPoints && e.Button == MouseButtons.Left)
+            {
+                HandlePointConnection(imagePoint);
+                return;
+            }
+
+            // 2. Ensuite vérifier les intersections (clic droit)
+            if (e.Button == MouseButtons.Right)
+            {
+                var intersection = FindIntersectionAtPoint(imagePoint);
+                if (intersection.HasValue)
+                {
+                    selectedIntersection = intersection;
+                    ShowAngleContextMenu(e.Location, intersection.Value);
+                    return;
+                }
+            }
+
             // Détection des points d'intersection - Clic Droit
             if (e.Button == MouseButtons.Right)
             {
@@ -3490,6 +3701,114 @@ namespace kinectProject
             {
                 HandleSelection(imagePoint);
             }
+        }
+
+        // CRÉER la fonction HandlePointConnection :
+        private void HandlePointConnection(Point clickPoint)
+        {
+            // Rechercher le point détecté le plus proche
+            DetectedPoint? nearestDetectedPoint = null;
+            double minDistance = double.MaxValue;
+
+            foreach (var point in detectedPoints)
+            {
+                double distance = CalculateDistance(clickPoint, point.Location);
+                if (distance < 20) // Tolérance de 20 pixels
+                {
+                    if (distance < minDistance)
+                    {
+                        minDistance = distance;
+                        nearestDetectedPoint = point;
+                    }
+                }
+            }
+
+            // Si aucun point détecté trouvé, chercher parmi les points de mesure existants
+            if (nearestDetectedPoint == null)
+            {
+                foreach (var measurement in measurements)
+                {
+                    if (measurement.Type == MeasurementType.Point)
+                    {
+                        double distance = CalculateDistance(clickPoint, measurement.Start);
+                        if (distance < 20) // Tolérance de 20 pixels
+                        {
+                            if (distance < minDistance)
+                            {
+                                minDistance = distance;
+                                nearestDetectedPoint = new DetectedPoint(
+                                    measurement.Start,
+                                    PointColor.Red, // Couleur par défaut
+                                    1.0, // Confiance par défaut
+                                    10, // Rayon par défaut
+                                    measurement.ID
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (nearestDetectedPoint == null)
+            {
+                UpdateStatus("Aucun point trouvé près du clic. Cliquez sur un point détecté.");
+                return;
+            }
+
+            // Mettre en surbrillance le point sélectionné
+            HighlightSelectedPoint(nearestDetectedPoint.Value);
+
+            if (selectedPointForLine == null)
+            {
+                // Premier point sélectionné
+                selectedPointForLine = nearestDetectedPoint.Value.Location;
+                UpdateStatus($"Premier point sélectionné (P{nearestDetectedPoint.Value.ID}). Cliquez sur le second point.");
+            }
+            else
+            {
+                // Deuxième point sélectionné - créer la ligne
+                CreateLineBetweenPoints(selectedPointForLine.Value, nearestDetectedPoint.Value);
+                selectedPointForLine = null;
+
+                // Demander si on veut continuer à connecter des points
+                var result = MessageBox.Show($"Ligne créée entre les points !\n\nVoulez-vous créer une autre ligne ?",
+                                            "Connexion réussie",
+                                            MessageBoxButtons.YesNo,
+                                            MessageBoxIcon.Question);
+
+                if (result == DialogResult.No)
+                {
+                    isCreatingLineBetweenPoints = false;
+                    drawingPanel.Cursor = Cursors.Default;
+                    UpdateStatus("Mode Connexion terminé.");
+                }
+                else
+                {
+                    UpdateStatus("Mode Connexion: Cliquez sur le premier point, puis sur le second");
+                }
+            }
+
+            drawingPanel.Invalidate();
+        }
+
+
+        private void HighlightSelectedPoint(DetectedPoint point)
+        {
+            // Mettre en surbrillance temporairement le point
+            // Nous allons dessiner un cercle plus grand autour du point
+            // Cette information sera utilisée dans DrawDetectedPoints
+            // Pour cela, nous allons ajouter une variable temporaire
+            highlightedPoint = point.Location;
+
+            // Effacer la surbrillance après 1 seconde
+            System.Windows.Forms.Timer highlightTimer = new System.Windows.Forms.Timer();
+            highlightTimer.Interval = 1000;
+            highlightTimer.Tick += (s, e) => {
+                highlightedPoint = null;
+                highlightTimer.Stop();
+                drawingPanel.Invalidate();
+            };
+            highlightTimer.Start();
         }
 
         private IntersectionPoint? FindIntersectionAtPoint(Point point)
@@ -4943,7 +5262,7 @@ namespace kinectProject
 
             // Sort measurements: regular measurements first, then intersection angles
             var sortedMeasurements = measurements
-                .OrderBy(m => !m.AngleValue.HasValue) // Regular measurements first
+                .OrderBy(m => m.AngleValue.HasValue) // Change from !m.AngleValue to m.AngleValue
                 .ThenBy(m => m.ID)
                 .ToList();
 
@@ -4971,15 +5290,15 @@ namespace kinectProject
                 }
                 else
                 {
-                    // Color code intersection angles differently
-                    if (m.Type == MeasurementType.Angle && m.AngleValue.HasValue)
-                    {
-                        item.BackColor = Color.FromArgb(255, 240, 245); // Light pink
-                    }
-                    else
-                    {
+                    //// Color code intersection angles differently
+                    //if (m.Type == MeasurementType.Angle && m.AngleValue.HasValue)
+                    //{
+                    //    item.BackColor = Color.FromArgb(255, 240, 245); // Light pink
+                    //}
+                    //else
+                    //{
                         item.BackColor = measurementsList.BackColor;
-                    }
+                    //}
                     item.ForeColor = measurementsList.ForeColor;
                 }
 
