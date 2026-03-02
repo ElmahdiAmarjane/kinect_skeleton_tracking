@@ -23,7 +23,7 @@ namespace kinectProject
         ////////////////////////////////
 
         // Add to enums section
-        private enum DetectionMode { None, SinglePoint, MultiplePoints, BodyContour }
+        public enum DetectionMode { None, SinglePoint, MultiplePoints, BodyContour, ManualPick, Automatic }
         public enum PointColor { Red, Green, Blue, Yellow, White, Custom }
 
         // Add after other structures
@@ -104,9 +104,9 @@ namespace kinectProject
                 measurement.RelatedLineIDs.Add(line2Id);
                 return measurement;
             }
-        
 
-    }
+
+        }
 
         private enum MeasurementType { Line, Point, Angle, AngleWithAxis, Distance, ReferenceLine, PerpendicularLine, None }
 
@@ -213,6 +213,15 @@ namespace kinectProject
 
         // AJOUTER cette variable pour la surbrillance :
         private Point? highlightedPoint = null;
+
+        /////
+
+        // Add these with the other fields
+        private bool isPickingReferenceColor = false;
+        private Color? referenceColor = null;
+        private Point? pickedPointLocation = null; // For visual feedback
+
+
 
         public BodyPictureAnalyzer()
         {
@@ -350,7 +359,7 @@ namespace kinectProject
             // Basculer l'état
             autoRenameEnabled =
                 !autoRenameEnabled;
-            
+
 
             // Mettre à jour le texte du bouton
             var button = sender as ToolStripButton;
@@ -366,40 +375,40 @@ namespace kinectProject
 
         ////
 
-        private void SimpleDetectionTest()
-        {
-            if (originalImage == null) return;
+        //private void SimpleDetectionTest()
+        //{
+        //    if (originalImage == null) return;
 
-            detectedPoints.Clear();
+        //    detectedPoints.Clear();
 
-            // Just detect bright red pixels
-            Bitmap bmp = new Bitmap(originalImage);
+        //    // Just detect bright red pixels
+        //    Bitmap bmp = new Bitmap(originalImage);
 
-            for (int x = 0; x < bmp.Width; x += 5) // Sample every 5 pixels
-            {
-                for (int y = 0; y < bmp.Height; y += 5)
-                {
-                    Color pixel = bmp.GetPixel(x, y);
+        //    for (int x = 0; x < bmp.Width; x += 5) // Sample every 5 pixels
+        //    {
+        //        for (int y = 0; y < bmp.Height; y += 5)
+        //        {
+        //            Color pixel = bmp.GetPixel(x, y);
 
-                    // Simple red detection: R > 200, G < 100, B < 100
-                    if (pixel.R > 200 && pixel.G < 100 && pixel.B < 100)
-                    {
-                        detectedPoints.Add(new DetectedPoint(
-                            new Point(x, y),
-                            PointColor.Red,
-                            1.0,
-                            10,
-                            detectedPoints.Count + 1));
-                    }
-                }
-            }
+        //            // Simple red detection: R > 200, G < 100, B < 100
+        //            if (pixel.R > 200 && pixel.G < 100 && pixel.B < 100)
+        //            {
+        //                detectedPoints.Add(new DetectedPoint(
+        //                    new Point(x, y),
+        //                    PointColor.Red,
+        //                    1.0,
+        //                    10,
+        //                    detectedPoints.Count + 1));
+        //            }
+        //        }
+        //    }
 
-            bmp.Dispose();
+        //    bmp.Dispose();
 
-            MessageBox.Show($"Simple detection found {detectedPoints.Count} red pixels");
-            CreateMeasurementsFromDetectedPoints();
-            drawingPanel.Invalidate();
-        }
+        //    MessageBox.Show($"Simple detection found {detectedPoints.Count} red pixels");
+        //    CreateMeasurementsFromDetectedPoints();
+        //    drawingPanel.Invalidate();
+        //}
 
 
         // // // // // // // // //
@@ -530,7 +539,7 @@ namespace kinectProject
                 CreateMeasurementsFromDetectedPoints();
 
                 // Sauvegarder et montrer
-              //  debug.Save("strict_sticker_detection.png");
+                //  debug.Save("strict_sticker_detection.png");
 
                 MessageBox.Show($"Autocollants détectés: {detectedPoints.Count}\n" +
                                $"Image sauvegardée: strict_sticker_detection.png",
@@ -689,9 +698,170 @@ namespace kinectProject
 
 
 
+        public class AutoRenameDialog : Form
+        {
+            private TextBox textBox;
+            private CheckBox dontAskCheckBox;
 
-  
-    
+            public string NewName { get; private set; }
+            public bool DontAskAgain { get; private set; }
+
+            public AutoRenameDialog(string defaultName)
+            {
+                InitializeComponent(defaultName);
+            }
+
+            private void InitializeComponent(string defaultName)
+            {
+                this.Text = "Rename Measurement";
+                this.Size = new Size(350, 180);
+                this.FormBorderStyle = FormBorderStyle.FixedDialog;
+                this.StartPosition = FormStartPosition.CenterParent;
+                this.MaximizeBox = false;
+                this.MinimizeBox = false;
+                this.BackColor = Color.FromArgb(45, 45, 48);
+                this.ForeColor = Color.White;
+
+                Label label = new Label
+                {
+                    Text = "Enter name for measurement:",
+                    Location = new Point(20, 20),
+                    Size = new Size(300, 20),
+                    ForeColor = Color.White
+                };
+
+                textBox = new TextBox
+                {
+                    Text = defaultName,
+                    Location = new Point(20, 50),
+                    Size = new Size(300, 20),
+                    BackColor = Color.FromArgb(62, 62, 64),
+                    ForeColor = Color.White,
+                    BorderStyle = BorderStyle.FixedSingle
+                };
+
+                dontAskCheckBox = new CheckBox
+                {
+                    Text = "Don't ask again (use auto-rename)",
+                    Location = new Point(20, 80),
+                    Size = new Size(200, 20),
+                    ForeColor = Color.LightGray,
+                    BackColor = Color.Transparent
+                };
+
+                Button okButton = new Button
+                {
+                    Text = "OK",
+                    DialogResult = DialogResult.OK,
+                    Location = new Point(80, 110),
+                    Size = new Size(80, 25),
+                    BackColor = Color.FromArgb(0, 122, 204),
+                    ForeColor = Color.White,
+                    FlatStyle = FlatStyle.Flat
+                };
+                okButton.Click += OkButton_Click;
+
+                Button cancelButton = new Button
+                {
+                    Text = "Cancel",
+                    DialogResult = DialogResult.Cancel,
+                    Location = new Point(180, 110),
+                    Size = new Size(80, 25),
+                    BackColor = Color.FromArgb(62, 62, 64),
+                    ForeColor = Color.White,
+                    FlatStyle = FlatStyle.Flat
+                };
+
+                this.Controls.AddRange(new Control[] { label, textBox, dontAskCheckBox, okButton, cancelButton });
+                this.AcceptButton = okButton;
+                this.CancelButton = cancelButton;
+            }
+
+            private void OkButton_Click(object sender, EventArgs e)
+            {
+                NewName = textBox.Text.Trim();
+                DontAskAgain = dontAskCheckBox.Checked;
+
+                if (string.IsNullOrWhiteSpace(NewName))
+                {
+                    MessageBox.Show("Please enter a valid name.");
+                    this.DialogResult = DialogResult.None;
+                }
+            }
+        }
+
+
+
+
+        public class ImprovedDetectionDialog : DetectionSettingsDialog
+        {
+            public DetectionMode DetectionMode { get; set; }
+            private RadioButton autoRadio;
+            private RadioButton manualRadio;
+
+            public ImprovedDetectionDialog(PointColor defaultColor, Color customColor,
+                                          int defaultTolerance, int defaultMinSize, int defaultMaxSize)
+                : base(defaultColor, customColor, defaultTolerance, defaultMinSize, defaultMaxSize)
+            {
+                // Add detection mode selection to the dialog
+                this.Height += 80;
+
+                GroupBox modeGroup = new GroupBox
+                {
+                    Text = "Detection Mode",
+                    Location = new Point(20, 190),
+                    Size = new Size(340, 70),
+                    ForeColor = Color.White
+                };
+
+                autoRadio = new RadioButton
+                {
+                    Text = "Automatic (use preset color)",
+                    Location = new Point(20, 20),
+                    Size = new Size(200, 20),
+                    ForeColor = Color.White,
+                    Checked = true
+                };
+
+                manualRadio = new RadioButton
+                {
+                    Text = "Manual (pick a reference color)",
+                    Location = new Point(20, 45),
+                    Size = new Size(200, 20),
+                    ForeColor = Color.White
+                };
+
+                modeGroup.Controls.Add(autoRadio);
+                modeGroup.Controls.Add(manualRadio);
+
+                this.Controls.Add(modeGroup);
+
+                // Move buttons down
+                foreach (Control ctrl in this.Controls)
+                {
+                    if (ctrl is Button && (ctrl.Text == "Detect Points" || ctrl.Text == "Cancel"))
+                    {
+                        ctrl.Location = new Point(ctrl.Location.X, ctrl.Location.Y + 60);
+                    }
+                    if (ctrl is Label && ctrl.Text.StartsWith("Tips"))
+                    {
+                        ctrl.Location = new Point(ctrl.Location.X, ctrl.Location.Y + 60);
+                    }
+                }
+            }
+
+            protected override void OnFormClosing(FormClosingEventArgs e)
+            {
+                if (this.DialogResult == DialogResult.OK)
+                {
+                    DetectionMode = autoRadio.Checked ?
+                        DetectionMode.Automatic : DetectionMode.ManualPick;
+                }
+                base.OnFormClosing(e);
+            }
+        }
+
+
 
         // //  // // // // //
         private void BtnDetectPoints_Click(object sender, EventArgs e)
@@ -703,7 +873,7 @@ namespace kinectProject
                 return;
             }
 
-            using (var detectionDialog = new DetectionSettingsDialog(
+            using (var detectionDialog = new ImprovedDetectionDialog(
                 selectedColor, customColor, detectionTolerance, minPointSize, maxPointSize))
             {
                 if (detectionDialog.ShowDialog() == DialogResult.OK)
@@ -714,14 +884,23 @@ namespace kinectProject
                     minPointSize = detectionDialog.MinSize;
                     maxPointSize = detectionDialog.MaxSize;
 
-                    // Start detection
-                    DetectColoredPoints();
+                    if (detectionDialog.DetectionMode == DetectionMode.ManualPick)
+                    {
+                        // Enter color picking mode
+                        isPickingReferenceColor = true;
+                        referenceColor = null;
+                        pickedPointLocation = null;
+                        UpdateStatus("Click on a sticker to sample its color");
+                        drawingPanel.Cursor = Cursors.Cross;
+                    }
+                    else
+                    {
+                        // Use automatic detection with selected color
+                        DetectColoredPointsFlexible(null);
+                    }
                 }
             }
-
-  
         }
-
 
         private void BtnConnectPoints_Click(object sender, EventArgs e)
         {
@@ -826,10 +1005,10 @@ namespace kinectProject
             return parent[x];
         }
 
-   
 
 
-     
+
+
 
         // Add these form classes at the end of your file
 
@@ -1932,7 +2111,7 @@ namespace kinectProject
 
             AddIntersectionAnglesToMeasurements();
 
-           
+
         }
 
         private Point? FindLineIntersection(Point p1, Point p2, Point p3, Point p4)
@@ -3659,16 +3838,7 @@ namespace kinectProject
             }
 
             // 2. Ensuite vérifier les intersections (clic droit)
-            if (e.Button == MouseButtons.Right)
-            {
-                var intersection = FindIntersectionAtPoint(imagePoint);
-                if (intersection.HasValue)
-                {
-                    selectedIntersection = intersection;
-                    ShowAngleContextMenu(e.Location, intersection.Value);
-                    return;
-                }
-            }
+         
 
             // Détection des points d'intersection - Clic Droit
             if (e.Button == MouseButtons.Right)
@@ -3685,7 +3855,7 @@ namespace kinectProject
             }
 
 
-        
+
 
             // FIX: Don't handle measurement creation if we're dragging grid
             if (isDraggingGrid) return;
@@ -3701,7 +3871,664 @@ namespace kinectProject
             {
                 HandleSelection(imagePoint);
             }
+
+            // Handle color picking mode
+            if (isPickingReferenceColor && originalImage != null && e.Button == MouseButtons.Left)
+            {
+                 imagePointF = TransformPointToImage(e.Location);
+                 imagePoint = new Point((int)imagePointF.X, (int)imagePointF.Y);
+
+                using (Bitmap bmp = new Bitmap(originalImage))
+                {
+                    if (imagePoint.X >= 0 && imagePoint.X < bmp.Width &&
+                        imagePoint.Y >= 0 && imagePoint.Y < bmp.Height)
+                    {
+                        Color pickedColor = bmp.GetPixel(imagePoint.X, imagePoint.Y);
+                        referenceColor = pickedColor;
+                        pickedPointLocation = imagePoint;
+
+                        // Show color preview and detection options
+                        ShowColorPreviewAndDetect(pickedColor, imagePoint);
+                    }
+                }
+
+                isPickingReferenceColor = false;
+                drawingPanel.Cursor = Cursors.Default;
+            }
         }
+
+
+
+
+        // New method to show color preview
+        private void ShowColorPreviewAndDetect(Color pickedColor, Point pickPoint)
+        {
+            // Create a preview form
+            Form previewForm = new Form
+            {
+                Text = "Color Sampled - Adjust Detection",
+                Size = new Size(450, 400),
+                StartPosition = FormStartPosition.CenterParent,
+                FormBorderStyle = FormBorderStyle.FixedDialog,
+                MaximizeBox = false,
+                MinimizeBox = false,
+                BackColor = Color.FromArgb(45, 45, 48)
+            };
+
+            // Sampled color preview
+            Label sampledLabel = new Label
+            {
+                Text = "Sampled Color:",
+                Location = new Point(20, 20),
+                Size = new Size(100, 25),
+                ForeColor = Color.White
+            };
+
+            Panel colorPanel = new Panel
+            {
+                BackColor = pickedColor,
+                Location = new Point(130, 20),
+                Size = new Size(100, 25),
+                BorderStyle = BorderStyle.FixedSingle
+            };
+
+            Label rgbLabel = new Label
+            {
+                Text = $"RGB: {pickedColor.R}, {pickedColor.G}, {pickedColor.B}",
+                Location = new Point(240, 20),
+                Size = new Size(150, 25),
+                ForeColor = Color.White
+            };
+
+            // HSV values
+            HsvColor hsv = RgbToHsv(pickedColor);
+            Label hsvLabel = new Label
+            {
+                Text = $"HSV: H={hsv.H:F0}°, S={hsv.S:F2}, V={hsv.V:F2}",
+                Location = new Point(20, 55),
+                Size = new Size(300, 25),
+                ForeColor = Color.Cyan
+            };
+
+            // Tolerance slider
+            Label toleranceLabel = new Label
+            {
+                Text = "Color Tolerance:",
+                Location = new Point(20, 100),
+                Size = new Size(100, 25),
+                ForeColor = Color.White
+            };
+
+            TrackBar toleranceTrackBar = new TrackBar
+            {
+                Location = new Point(130, 100),
+                Size = new Size(200, 45),
+                Minimum = 5,
+                Maximum = 50,
+                Value = detectionTolerance,
+                TickFrequency = 5
+            };
+
+            Label toleranceValue = new Label
+            {
+                Text = detectionTolerance.ToString(),
+                Location = new Point(340, 100),
+                Size = new Size(40, 25),
+                ForeColor = Color.Yellow
+            };
+
+            toleranceTrackBar.ValueChanged += (s, ev) =>
+            {
+                toleranceValue.Text = toleranceTrackBar.Value.ToString();
+            };
+
+            // Preview panel
+            Panel previewPanel = new Panel
+            {
+                Location = new Point(20, 160),
+                Size = new Size(400, 100),
+                BorderStyle = BorderStyle.FixedSingle,
+                BackColor = Color.Black
+            };
+
+            PictureBox previewBox = new PictureBox
+            {
+                Dock = DockStyle.Fill,
+                SizeMode = PictureBoxSizeMode.Zoom
+            };
+            previewPanel.Controls.Add(previewBox);
+
+            // Update preview when tolerance changes
+            toleranceTrackBar.ValueChanged += (s, ev) =>
+            {
+                UpdateDetectionPreview(previewBox, pickedColor, toleranceTrackBar.Value);
+            };
+
+            // Buttons
+            Button detectButton = new Button
+            {
+                Text = "Detect Stickers",
+                Location = new Point(100, 280),
+                Size = new Size(120, 30),
+                BackColor = Color.FromArgb(0, 122, 204),
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat
+            };
+
+            Button cancelButton = new Button
+            {
+                Text = "Cancel",
+                Location = new Point(230, 280),
+                Size = new Size(120, 30),
+                BackColor = Color.FromArgb(62, 62, 64),
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat,
+                DialogResult = DialogResult.Cancel
+            };
+
+            Button resetButton = new Button
+            {
+                Text = "Pick Another Color",
+                Location = new Point(100, 320),
+                Size = new Size(250, 30),
+                BackColor = Color.FromArgb(62, 62, 64),
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat
+            };
+
+            detectButton.Click += (s, ev) =>
+            {
+                detectionTolerance = toleranceTrackBar.Value;
+                previewForm.Close();
+                DetectColoredPointsFlexible(pickedColor);
+            };
+
+            resetButton.Click += (s, ev) =>
+            {
+                previewForm.Close();
+                isPickingReferenceColor = true;
+                UpdateStatus("Click on a sticker to sample its color");
+                drawingPanel.Cursor = Cursors.Cross;
+            };
+
+            // Add controls
+            previewForm.Controls.AddRange(new Control[]
+            {
+        sampledLabel, colorPanel, rgbLabel, hsvLabel,
+        toleranceLabel, toleranceTrackBar, toleranceValue,
+        previewPanel, detectButton, cancelButton, resetButton
+            });
+
+            // Initial preview
+            UpdateDetectionPreview(previewBox, pickedColor, detectionTolerance);
+
+            previewForm.ShowDialog(this);
+        }
+
+        // Update preview image
+        private void UpdateDetectionPreview(PictureBox previewBox, Color targetColor, int tolerance)
+        {
+            if (originalImage == null) return;
+
+            using (Bitmap bmp = new Bitmap(originalImage))
+            using (Bitmap preview = new Bitmap(bmp.Width, bmp.Height))
+            {
+                HsvColor targetHsv = RgbToHsv(targetColor);
+                float hueTolerance = tolerance; // 0-50 range
+
+                for (int y = 0; y < bmp.Height; y += 3) // Sample every 3 pixels for speed
+                {
+                    for (int x = 0; x < bmp.Width; x += 3)
+                    {
+                        Color pixel = bmp.GetPixel(x, y);
+                        HsvColor pixelHsv = RgbToHsv(pixel);
+
+                        float hueDiff = Math.Abs(pixelHsv.H - targetHsv.H);
+                        hueDiff = Math.Min(hueDiff, 360 - hueDiff);
+
+                        // Highlight detected pixels in red
+                        if (hueDiff <= hueTolerance &&
+                            Math.Abs(pixelHsv.S - targetHsv.S) < 0.3f &&
+                            Math.Abs(pixelHsv.V - targetHsv.V) < 0.3f)
+                        {
+                            preview.SetPixel(x, y, Color.Red);
+                        }
+                        else
+                        {
+                            // Darken non-detected pixels
+                            preview.SetPixel(x, y, Color.FromArgb(
+                                pixel.R / 3,
+                                pixel.G / 3,
+                                pixel.B / 3));
+                        }
+                    }
+                }
+
+                previewBox.Image = new Bitmap(preview);
+            }
+        }
+
+
+        // The main flexible detection method
+        // The main flexible detection method
+        // Replace your DetectColoredPointsFlexible method with this:
+        private void DetectColoredPointsFlexible(Color? referenceColor)
+        {
+            if (originalImage == null)
+            {
+                MessageBox.Show("Please load an image first.", "No Image",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            detectedPoints.Clear();
+            Color targetColor;
+
+            if (referenceColor.HasValue)
+            {
+                targetColor = referenceColor.Value;
+                UpdateStatus($"Detecting points using sampled color: RGB({targetColor.R},{targetColor.G},{targetColor.B})");
+            }
+            else
+            {
+                targetColor = GetColorFromEnum(selectedColor);
+                UpdateStatus($"Detecting points using preset color: {selectedColor}");
+            }
+
+            using (Bitmap bmp = new Bitmap(originalImage))
+            {
+                int width = bmp.Width;
+                int height = bmp.Height;
+
+                // Create a debug bitmap to visualize what's being detected
+                Bitmap debugBmp = new Bitmap(width, height);
+
+                // SIMPLE RGB DETECTION - Look for pixels similar to the target color
+                bool[,] mask = new bool[height, width];
+                int totalSimilarPixels = 0;
+
+                // Tolerance for RGB difference
+                int rgbTolerance = 50; // How close the color needs to be
+
+                for (int y = 0; y < height; y++)
+                {
+                    for (int x = 0; x < width; x++)
+                    {
+                        Color pixel = bmp.GetPixel(x, y);
+
+                        // Calculate RGB difference
+                        int rDiff = Math.Abs(pixel.R - targetColor.R);
+                        int gDiff = Math.Abs(pixel.G - targetColor.G);
+                        int bDiff = Math.Abs(pixel.B - targetColor.B);
+
+                        // Check if pixel is similar to target color
+                        bool isSimilar = rDiff <= rgbTolerance &&
+                                         gDiff <= rgbTolerance &&
+                                         bDiff <= rgbTolerance;
+
+                        // For debugging, color the debug image
+                        if (isSimilar)
+                        {
+                            debugBmp.SetPixel(x, y, Color.Red); // Mark detected pixels in red
+                        }
+                        else
+                        {
+                            // Darken non-detected pixels
+                            debugBmp.SetPixel(x, y, Color.FromArgb(
+                                pixel.R / 3,
+                                pixel.G / 3,
+                                pixel.B / 3));
+                        }
+
+                        mask[y, x] = isSimilar;
+                        if (isSimilar) totalSimilarPixels++;
+                    }
+                }
+
+                // Save debug image to see what was detected
+                string debugPath = Path.Combine(Path.GetTempPath(), "detection_debug.png");
+                debugBmp.Save(debugPath);
+                debugBmp.Dispose();
+
+                if (totalSimilarPixels == 0)
+                {
+                    MessageBox.Show($"No pixels found with color similar to RGB({targetColor.R},{targetColor.G},{targetColor.B})\n" +
+                                   $"Tolerance used: {rgbTolerance}\n\n" +
+                                   $"Debug image saved to:\n{debugPath}\n\n" +
+                                   "Try clicking directly on a brighter part of the sticker.",
+                                   "Detection Failed", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+
+                // Find connected components - use a VERY low minimum size
+                List<ConnectedComponent> components = FindAllComponents(mask, width, height);
+
+                // Build detailed debug info
+                StringBuilder debugInfo = new StringBuilder();
+                debugInfo.AppendLine($"=== DETECTION DEBUG ===");
+                debugInfo.AppendLine($"Total similar pixels: {totalSimilarPixels}");
+                debugInfo.AppendLine($"Components found: {components.Count}");
+                debugInfo.AppendLine($"Debug image: {debugPath}");
+                debugInfo.AppendLine($"\nComponent details:");
+
+                int id = 1;
+                List<ConnectedComponent> validComponents = new List<ConnectedComponent>();
+
+                foreach (var component in components)
+                {
+                    debugInfo.AppendLine($"\nComponent {id}:");
+                    debugInfo.AppendLine($"  Pixel count: {component.PixelCount}");
+                    debugInfo.AppendLine($"  Bounds: {component.Width} x {component.Height}");
+                    debugInfo.AppendLine($"  Area: {component.Width * component.Height} pixels");
+
+                    // MUCH MORE PERMISSIVE FILTERING
+                    // Accept almost anything that's not tiny
+                    if (component.PixelCount >= 10) // Only filter out extremely tiny groups
+                    {
+                        // Calculate center
+                        Point center = new Point(
+                            (component.MinX + component.MaxX) / 2,
+                            (component.MinY + component.MaxY) / 2
+                        );
+
+                        detectedPoints.Add(new DetectedPoint(
+                            center,
+                            selectedColor,
+                            1.0,
+                            (int)Math.Sqrt(component.PixelCount / Math.PI),
+                            id
+                        ));
+
+                        validComponents.Add(component);
+                        debugInfo.AppendLine($"  ✓ ACCEPTED as sticker {id}");
+                        id++;
+                    }
+                    else
+                    {
+                        debugInfo.AppendLine($"  ✗ REJECTED (too small)");
+                    }
+                }
+
+                // Show detailed debug info
+                debugInfo.AppendLine($"\n=== RESULT ===");
+                debugInfo.AppendLine($"Final stickers detected: {detectedPoints.Count}");
+                debugInfo.AppendLine($"\nPress OK to continue with detection.");
+
+                MessageBox.Show(debugInfo.ToString(), "Detection Debug",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+
+                if (detectedPoints.Count > 0)
+                {
+                    CreateMeasurementsFromDetectedPoints();
+                    drawingPanel.Invalidate();
+
+                    MessageBox.Show($"Success! Found {detectedPoints.Count} stickers.\n\n" +
+                                   $"Debug image saved to:\n{debugPath}",
+                                   "Detection Complete",
+                                   MessageBoxButtons.OK,
+                                   MessageBoxIcon.Information);
+                }
+                else
+                {
+                    MessageBox.Show($"Found {components.Count} color regions but none passed the filters.\n\n" +
+                                   $"Check the debug image to see what was detected:\n{debugPath}\n\n" +
+                                   "The detected pixels are shown in RED in the debug image.",
+                                   "No Stickers Detected",
+                                   MessageBoxButtons.OK,
+                                   MessageBoxIcon.Warning);
+                }
+            }
+        }
+
+        // New method to find ALL components without filtering
+        private List<ConnectedComponent> FindAllComponents(bool[,] mask, int width, int height)
+        {
+            List<ConnectedComponent> components = new List<ConnectedComponent>();
+            bool[,] visited = new bool[height, width];
+            Queue<Point> queue = new Queue<Point>();
+
+            for (int y = 0; y < height; y++)
+            {
+                for (int x = 0; x < width; x++)
+                {
+                    if (mask[y, x] && !visited[y, x])
+                    {
+                        ConnectedComponent comp = new ConnectedComponent();
+                        queue.Clear();
+                        queue.Enqueue(new Point(x, y));
+
+                        while (queue.Count > 0)
+                        {
+                            Point p = queue.Dequeue();
+
+                            if (p.X < 0 || p.X >= width || p.Y < 0 || p.Y >= height ||
+                                visited[p.Y, p.X] || !mask[p.Y, p.X])
+                                continue;
+
+                            visited[p.Y, p.X] = true;
+                            comp.Add(p.X, p.Y);
+
+                            // Check all 8 neighbors
+                            for (int dy = -1; dy <= 1; dy++)
+                            {
+                                for (int dx = -1; dx <= 1; dx++)
+                                {
+                                    if (dx == 0 && dy == 0) continue;
+                                    queue.Enqueue(new Point(p.X + dx, p.Y + dy));
+                                }
+                            }
+                        }
+
+                        components.Add(comp);
+                    }
+                }
+            }
+
+            return components;
+        }
+        // Fix the RgbToHsv method:
+        private HsvColor RgbToHsv(Color rgb)
+        {
+            float r = rgb.R / 255f;
+            float g = rgb.G / 255f;
+            float b = rgb.B / 255f;
+
+            float max = Math.Max(r, Math.Max(g, b));
+            float min = Math.Min(r, Math.Min(g, b));
+            float delta = max - min;
+
+            float h = 0;
+            float s = (max == 0) ? 0 : delta / max;
+            float v = max;
+
+            if (delta != 0)
+            {
+                if (max == r)
+                    h = 60 * (((g - b) / delta) % 6);
+                else if (max == g)
+                    h = 60 * (((b - r) / delta) + 2);
+                else
+                    h = 60 * (((r - g) / delta) + 4);
+            }
+
+            if (h < 0) h += 360;
+
+            return new HsvColor(h, s, v);
+        }
+
+        // Fix the FindStickersFlexible method:
+        private List<ConnectedComponent> FindStickersFlexible(bool[,] mask, int width, int height)
+        {
+            List<ConnectedComponent> components = new List<ConnectedComponent>();
+            bool[,] visited = new bool[height, width];
+            Queue<Point> queue = new Queue<Point>();
+
+            for (int y = 0; y < height; y++)
+            {
+                for (int x = 0; x < width; x++)
+                {
+                    if (mask[y, x] && !visited[y, x])
+                    {
+                        ConnectedComponent comp = new ConnectedComponent();
+                        queue.Clear();
+                        queue.Enqueue(new Point(x, y));
+
+                        while (queue.Count > 0)
+                        {
+                            Point p = queue.Dequeue();
+
+                            if (p.X < 0 || p.X >= width || p.Y < 0 || p.Y >= height ||
+                                visited[p.Y, p.X] || !mask[p.Y, p.X])
+                                continue;
+
+                            visited[p.Y, p.X] = true;
+                            comp.Add(p.X, p.Y);
+
+                            // Check 4-connected neighbors (faster, better for stickers)
+                            queue.Enqueue(new Point(p.X + 1, p.Y));
+                            queue.Enqueue(new Point(p.X - 1, p.Y));
+                            queue.Enqueue(new Point(p.X, p.Y + 1));
+                            queue.Enqueue(new Point(p.X, p.Y - 1));
+
+                            // Also check diagonals for better connectivity
+                            queue.Enqueue(new Point(p.X + 1, p.Y + 1));
+                            queue.Enqueue(new Point(p.X - 1, p.Y - 1));
+                            queue.Enqueue(new Point(p.X + 1, p.Y - 1));
+                            queue.Enqueue(new Point(p.X - 1, p.Y + 1));
+                        }
+
+                        // Keep all components, we'll filter later
+                        components.Add(comp);
+                    }
+                }
+            }
+
+            return components;
+        }
+
+        // Fix the SimpleDetectionTest to work immediately:
+        private void SimpleDetectionTest()
+        {
+            if (originalImage == null)
+            {
+                MessageBox.Show("Load an image first!");
+                return;
+            }
+
+            detectedPoints.Clear();
+
+            using (Bitmap bmp = new Bitmap(originalImage))
+            {
+                int id = 1;
+
+                // Scan the entire image
+                for (int x = 0; x < bmp.Width; x += 2) // Sample every 2 pixels
+                {
+                    for (int y = 0; y < bmp.Height; y += 2)
+                    {
+                        Color pixel = bmp.GetPixel(x, y);
+
+                        // SIMPLE: Look for bright red pixels
+                        if (pixel.R > 200 && pixel.G < 100 && pixel.B < 100)
+                        {
+                            // Check if this is part of a larger region
+                            bool isNewPoint = true;
+                            foreach (var existing in detectedPoints)
+                            {
+                                double distance = Math.Sqrt(
+                                    Math.Pow(existing.Location.X - x, 2) +
+                                    Math.Pow(existing.Location.Y - y, 2));
+                                if (distance < 30) // Within 30 pixels of existing point
+                                {
+                                    isNewPoint = false;
+                                    break;
+                                }
+                            }
+
+                            if (isNewPoint)
+                            {
+                                detectedPoints.Add(new DetectedPoint(
+                                    new Point(x, y),
+                                    PointColor.Red,
+                                    1.0,
+                                    10,
+                                    id++
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+
+            MessageBox.Show($"Simple detection found {detectedPoints.Count} red pixels");
+
+            if (detectedPoints.Count > 0)
+            {
+                CreateMeasurementsFromDetectedPoints();
+                drawingPanel.Invalidate();
+            }
+        }
+
+        // Calculate confidence based on color similarity
+        private double CalculateColorConfidence(Color c1, Color c2)
+        {
+            // Calculate Euclidean distance in RGB space
+            double rDiff = c1.R - c2.R;
+            double gDiff = c1.G - c2.G;
+            double bDiff = c1.B - c2.B;
+
+            double distance = Math.Sqrt(rDiff * rDiff + gDiff * gDiff + bDiff * bDiff);
+            double maxDistance = Math.Sqrt(3 * 255 * 255); // Maximum possible distance
+
+            // Convert to confidence (1.0 = perfect match, 0.0 = completely different)
+            return 1.0 - (distance / maxDistance);
+        }
+        // More efficient connected component finding
+       
+    
+
+        // HSV color structure
+        private struct HsvColor
+        {
+            public float H; // Hue: 0-360
+            public float S; // Saturation: 0-1
+            public float V; // Value: 0-1
+
+            public HsvColor(float h, float s, float v)
+            {
+                H = h;
+                S = s;
+                V = v;
+            }
+        }
+
+        // Convert RGB to HSV
+
+        // Helper to get color from enum
+        private Color GetColorFromEnum(PointColor color)
+        {
+            switch (color)
+            {
+                case PointColor.Red: return Color.Red;
+                case PointColor.Green: return Color.Green;
+                case PointColor.Blue: return Color.Blue;
+                case PointColor.Yellow: return Color.Yellow;
+                case PointColor.White: return Color.White;
+                case PointColor.Custom: return customColor;
+                default: return Color.Red;
+            }
+        }
+
+
+
+
+
+
+
+
+
+
+
 
         // CRÉER la fonction HandlePointConnection :
         private void HandlePointConnection(Point clickPoint)
@@ -3885,7 +4712,7 @@ namespace kinectProject
 
             contextMenu.Items.Add(new ToolStripSeparator());
 
-          
+
 
             // Boutons d'action
             ToolStripMenuItem copyItem = new ToolStripMenuItem("📋 Copy All Data");
@@ -4610,7 +5437,7 @@ namespace kinectProject
                     {
                         // Sauvegarder la préférence
                         autoRenameEnabled = false;
-                     
+
                     }
 
                     return string.IsNullOrWhiteSpace(renameDialog.NewName) ?
@@ -5212,7 +6039,7 @@ namespace kinectProject
             isReferenceSet = false;
             pixelToRealRatio = 1.0f;
             isSettingReference = false;
-      
+
 
             // AUGMENTATION: Effacer aussi les intersections
             intersectionPoints.Clear();
@@ -5297,7 +6124,7 @@ namespace kinectProject
                     //}
                     //else
                     //{
-                        item.BackColor = measurementsList.BackColor;
+                    item.BackColor = measurementsList.BackColor;
                     //}
                     item.ForeColor = measurementsList.ForeColor;
                 }
@@ -5595,7 +6422,7 @@ namespace kinectProject
                 };
                 document.Add(detailContent);
 
-              //  AddIntersectionStatistics(document);
+                //  AddIntersectionStatistics(document);
             }
 
             // ===== Reference Scale =====
