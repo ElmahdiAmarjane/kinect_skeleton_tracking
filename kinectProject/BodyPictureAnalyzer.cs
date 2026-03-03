@@ -4140,148 +4140,279 @@ namespace kinectProject
                 int width = bmp.Width;
                 int height = bmp.Height;
 
-                // Create a debug bitmap to visualize what's being detected
-                Bitmap debugBmp = new Bitmap(width, height);
+                HsvColor targetHsv = RgbToHsv(targetColor);
+                bool[,] strictMask = new bool[height, width];
+                int totalStrictPixels = 0;
 
-                // SIMPLE RGB DETECTION - Look for pixels similar to the target color
-                bool[,] mask = new bool[height, width];
-                int totalSimilarPixels = 0;
-
-                // Tolerance for RGB difference
-                int rgbTolerance = 50; // How close the color needs to be
+                // --- FIX 1: Wider but smarter thresholds ---
+                // Use adaptive thresholds based on target color properties
+                float hueThreshold = (targetHsv.S < 0.3f) ? 360f : 25f; // For low-saturation/grey, ignore hue
+                float satThreshold = 0.35f;  // slightly more forgiving
+                float valThreshold = 0.35f;  // allows shadow/glare variation
+                double rgbThreshold = 55.0;  // wider RGB net
 
                 for (int y = 0; y < height; y++)
                 {
                     for (int x = 0; x < width; x++)
                     {
                         Color pixel = bmp.GetPixel(x, y);
+                        HsvColor pixelHsv = RgbToHsv(pixel);
 
-                        // Calculate RGB difference
-                        int rDiff = Math.Abs(pixel.R - targetColor.R);
-                        int gDiff = Math.Abs(pixel.G - targetColor.G);
-                        int bDiff = Math.Abs(pixel.B - targetColor.B);
+                        double rgbDistance = Math.Sqrt(
+                            Math.Pow(pixel.R - targetColor.R, 2) +
+                            Math.Pow(pixel.G - targetColor.G, 2) +
+                            Math.Pow(pixel.B - targetColor.B, 2));
 
-                        // Check if pixel is similar to target color
-                        bool isSimilar = rDiff <= rgbTolerance &&
-                                         gDiff <= rgbTolerance &&
-                                         bDiff <= rgbTolerance;
+                        float hueDiff = Math.Abs(pixelHsv.H - targetHsv.H);
+                        hueDiff = Math.Min(hueDiff, 360 - hueDiff);
 
-                        // For debugging, color the debug image
-                        if (isSimilar)
+                        float satDiff = Math.Abs(pixelHsv.S - targetHsv.S);
+                        float valDiff = Math.Abs(pixelHsv.V - targetHsv.V);
+
+                        bool isMatch =
+                            rgbDistance <= rgbThreshold &&
+                            hueDiff <= hueThreshold &&
+                            satDiff <= satThreshold &&
+                            valDiff <= valThreshold;
+
+                        if (isMatch)
                         {
-                            debugBmp.SetPixel(x, y, Color.Red); // Mark detected pixels in red
+                            strictMask[y, x] = true;
+                            totalStrictPixels++;
                         }
-                        else
-                        {
-                            // Darken non-detected pixels
-                            debugBmp.SetPixel(x, y, Color.FromArgb(
-                                pixel.R / 3,
-                                pixel.G / 3,
-                                pixel.B / 3));
-                        }
-
-                        mask[y, x] = isSimilar;
-                        if (isSimilar) totalSimilarPixels++;
                     }
                 }
 
-                // Save debug image to see what was detected
-                string debugPath = Path.Combine(Path.GetTempPath(), "detection_debug.png");
-                debugBmp.Save(debugPath);
-                debugBmp.Dispose();
+                // --- FIX 2: Apply morphological closing to fill small gaps ---
+                // This reconnects sticker pixels split by glare/shadow
+                strictMask = MorphologicalClose(strictMask, width, height, radius: 2);
 
-                if (totalSimilarPixels == 0)
+                string debugPath = Path.Combine(Path.GetTempPath(), "strict_detection.png");
+                SaveDebugImage(bmp, strictMask, debugPath);
+
+                if (totalStrictPixels == 0)
                 {
-                    MessageBox.Show($"No pixels found with color similar to RGB({targetColor.R},{targetColor.G},{targetColor.B})\n" +
-                                   $"Tolerance used: {rgbTolerance}\n\n" +
-                                   $"Debug image saved to:\n{debugPath}\n\n" +
-                                   "Try clicking directly on a brighter part of the sticker.",
-                                   "Detection Failed", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    MessageBox.Show($"No matches found.\nDebug image: {debugPath}",
+                        "Detection Info", MessageBoxButtons.OK, MessageBoxIcon.Information);
                     return;
                 }
 
-                // Find connected components - use a VERY low minimum size
-                List<ConnectedComponent> components = FindAllComponents(mask, width, height);
+                List<ConnectedComponent> components = FindStrictComponents(strictMask, width, height);
 
-                // Build detailed debug info
+                // --- FIX 3: Better size estimation using ALL component sizes ---
+                int expectedStickerSize = EstimateStickerSizeRobust(components);
+
+                // Generous size range — it's better to over-detect than under-detect
+                int minStickerArea = Math.Max(10, expectedStickerSize / 4);
+                int maxStickerArea = expectedStickerSize * 5; // No hard cap at 500
+
                 StringBuilder debugInfo = new StringBuilder();
-                debugInfo.AppendLine($"=== DETECTION DEBUG ===");
-                debugInfo.AppendLine($"Total similar pixels: {totalSimilarPixels}");
+                debugInfo.AppendLine($"=== DETECTION REPORT ===");
+                debugInfo.AppendLine($"Target RGB: ({targetColor.R},{targetColor.G},{targetColor.B})");
+                debugInfo.AppendLine($"Target HSV: H={targetHsv.H:F1}°, S={targetHsv.S:F2}, V={targetHsv.V:F2}");
+                debugInfo.AppendLine($"Matched pixels: {totalStrictPixels}");
                 debugInfo.AppendLine($"Components found: {components.Count}");
-                debugInfo.AppendLine($"Debug image: {debugPath}");
-                debugInfo.AppendLine($"\nComponent details:");
+                debugInfo.AppendLine($"Estimated sticker size: {expectedStickerSize} px");
+                debugInfo.AppendLine($"Size range: {minStickerArea} - {maxStickerArea}");
 
                 int id = 1;
-                List<ConnectedComponent> validComponents = new List<ConnectedComponent>();
+                List<DetectedPoint> validatedPoints = new List<DetectedPoint>();
 
-                foreach (var component in components)
+                foreach (var component in components.OrderByDescending(c => c.PixelCount))
                 {
-                    debugInfo.AppendLine($"\nComponent {id}:");
-                    debugInfo.AppendLine($"  Pixel count: {component.PixelCount}");
+                    debugInfo.AppendLine($"\n--- Component {id} ---");
+                    debugInfo.AppendLine($"  Pixels: {component.PixelCount}");
                     debugInfo.AppendLine($"  Bounds: {component.Width} x {component.Height}");
-                    debugInfo.AppendLine($"  Area: {component.Width * component.Height} pixels");
 
-                    // MUCH MORE PERMISSIVE FILTERING
-                    // Accept almost anything that's not tiny
-                    if (component.PixelCount >= 10) // Only filter out extremely tiny groups
+                    // CRITERION 1: Size
+                    bool validSize = component.PixelCount >= minStickerArea &&
+                                     component.PixelCount <= maxStickerArea;
+
+                    // CRITERION 2: Aspect ratio (circular stickers shouldn't be very elongated)
+                    float aspectRatio = (float)Math.Max(component.Width, component.Height) /
+                                         Math.Max(1, Math.Min(component.Width, component.Height));
+                    bool validAspect = aspectRatio <= 3.0f; // More forgiving than 2.0
+
+                    // --- FIX 4: Use fast circularity with HashSet for O(1) lookup ---
+                    double circularity = CalculateFastCircularity(component);
+                    bool validCircularity = circularity >= 0.3; // Lowered from 0.4
+
+                    // CRITERION 4: Color consistency
+                    double colorStdDev = CalculateColorStandardDeviation(component, bmp, targetColor);
+                    bool consistentColor = colorStdDev <= 40; // Slightly more forgiving
+
+                    // --- FIX 5: Remove the unreliable hole-check, replace with density check ---
+                    // Density = pixelCount / boundingBoxArea (solid stickers should be dense)
+                    int bboxArea = Math.Max(1, component.Width * component.Height);
+                    double density = (double)component.PixelCount / bboxArea;
+                    bool validDensity = density >= 0.35; // At least 35% fill
+
+                    // CRITERION 6: Edge strength
+                    double edgeStrength = CalculateEdgeStrength(component, bmp);
+                    bool validEdge = edgeStrength > 0.2; // Lowered threshold
+
+                    int passedCriteria = 0;
+                    if (validSize) { passedCriteria++; debugInfo.AppendLine($"  ✓ Size ({component.PixelCount})"); }
+                    else debugInfo.AppendLine($"  ✗ Size ({component.PixelCount}, need {minStickerArea}-{maxStickerArea})");
+
+                    if (validAspect) { passedCriteria++; debugInfo.AppendLine($"  ✓ Aspect ({aspectRatio:F2})"); }
+                    else debugInfo.AppendLine($"  ✗ Aspect ({aspectRatio:F2})");
+
+                    if (validCircularity) { passedCriteria++; debugInfo.AppendLine($"  ✓ Circularity ({circularity:F3})"); }
+                    else debugInfo.AppendLine($"  ✗ Circularity ({circularity:F3})");
+
+                    if (consistentColor) { passedCriteria++; debugInfo.AppendLine($"  ✓ Color StdDev ({colorStdDev:F1})"); }
+                    else debugInfo.AppendLine($"  ✗ Color StdDev ({colorStdDev:F1})");
+
+                    if (validDensity) { passedCriteria++; debugInfo.AppendLine($"  ✓ Density ({density:F2})"); }
+                    else debugInfo.AppendLine($"  ✗ Density ({density:F2})");
+
+                    if (validEdge) { passedCriteria++; debugInfo.AppendLine($"  ✓ Edge ({edgeStrength:F2})"); }
+                    else debugInfo.AppendLine($"  ✗ Edge ({edgeStrength:F2})");
+
+                    // --- FIX 6: Only need 3/6 — size+aspect are most reliable ---
+                    // But require size to always pass (most important filter)
+                    bool isValid = validSize && passedCriteria >= 3;
+
+                    debugInfo.AppendLine($"  Criteria passed: {passedCriteria}/6 → {(isValid ? "✓ ACCEPTED" : "✗ REJECTED")}");
+
+                    if (isValid)
                     {
-                        // Calculate center
-                        Point center = new Point(
-                            (component.MinX + component.MaxX) / 2,
-                            (component.MinY + component.MaxY) / 2
-                        );
+                        Point center = CalculatePreciseCenter(component);
+                        double confidence = passedCriteria / 6.0;
 
-                        detectedPoints.Add(new DetectedPoint(
+                        validatedPoints.Add(new DetectedPoint(
                             center,
                             selectedColor,
-                            1.0,
+                            confidence,
                             (int)Math.Sqrt(component.PixelCount / Math.PI),
                             id
                         ));
-
-                        validComponents.Add(component);
-                        debugInfo.AppendLine($"  ✓ ACCEPTED as sticker {id}");
                         id++;
-                    }
-                    else
-                    {
-                        debugInfo.AppendLine($"  ✗ REJECTED (too small)");
                     }
                 }
 
-                // Show detailed debug info
-                debugInfo.AppendLine($"\n=== RESULT ===");
-                debugInfo.AppendLine($"Final stickers detected: {detectedPoints.Count}");
-                debugInfo.AppendLine($"\nPress OK to continue with detection.");
+                debugInfo.AppendLine($"\n=== FINAL: {validatedPoints.Count} stickers detected ===");
 
-                MessageBox.Show(debugInfo.ToString(), "Detection Debug",
+                MessageBox.Show(debugInfo.ToString(), "Detection Analysis",
                     MessageBoxButtons.OK, MessageBoxIcon.Information);
 
-                if (detectedPoints.Count > 0)
+                if (validatedPoints.Count > 0)
                 {
+                    detectedPoints.AddRange(validatedPoints);
                     CreateMeasurementsFromDetectedPoints();
                     drawingPanel.Invalidate();
-
-                    MessageBox.Show($"Success! Found {detectedPoints.Count} stickers.\n\n" +
-                                   $"Debug image saved to:\n{debugPath}",
-                                   "Detection Complete",
-                                   MessageBoxButtons.OK,
-                                   MessageBoxIcon.Information);
+                    ShowDetectionConfirmation(validatedPoints);
                 }
                 else
                 {
-                    MessageBox.Show($"Found {components.Count} color regions but none passed the filters.\n\n" +
-                                   $"Check the debug image to see what was detected:\n{debugPath}\n\n" +
-                                   "The detected pixels are shown in RED in the debug image.",
-                                   "No Stickers Detected",
-                                   MessageBoxButtons.OK,
-                                   MessageBoxIcon.Warning);
+                    MessageBox.Show("No valid stickers found.\nCheck debug image: " + debugPath,
+                        "Detection Failed", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 }
             }
         }
 
-        // New method to find ALL components without filtering
-        private List<ConnectedComponent> FindAllComponents(bool[,] mask, int width, int height)
+        // --- NEW: Morphological Close (dilate then erode) to bridge small gaps ---
+        private bool[,] MorphologicalClose(bool[,] mask, int width, int height, int radius)
+        {
+            // Dilate
+            bool[,] dilated = new bool[height, width];
+            for (int y = 0; y < height; y++)
+                for (int x = 0; x < width; x++)
+                    if (mask[y, x])
+                        for (int dy = -radius; dy <= radius; dy++)
+                            for (int dx = -radius; dx <= radius; dx++)
+                            {
+                                int nx = x + dx, ny = y + dy;
+                                if (nx >= 0 && nx < width && ny >= 0 && ny < height)
+                                    dilated[ny, nx] = true;
+                            }
+
+            // Erode
+            bool[,] closed = new bool[height, width];
+            for (int y = 0; y < height; y++)
+                for (int x = 0; x < width; x++)
+                {
+                    bool allSet = true;
+                    for (int dy = -radius; dy <= radius && allSet; dy++)
+                        for (int dx = -radius; dx <= radius && allSet; dx++)
+                        {
+                            int nx = x + dx, ny = y + dy;
+                            if (nx < 0 || nx >= width || ny < 0 || ny >= height || !dilated[ny, nx])
+                                allSet = false;
+                        }
+                    closed[y, x] = allSet;
+                }
+            return closed;
+        }
+
+        // --- NEW: Robust size estimation using mode/cluster of sizes ---
+        private int EstimateStickerSizeRobust(List<ConnectedComponent> components)
+        {
+            if (components.Count == 0) return 50;
+
+            var sizes = components
+                .Where(c => c.PixelCount >= 10)
+                .Select(c => c.PixelCount)
+                .OrderBy(s => s)
+                .ToList();
+
+            if (sizes.Count == 0) return 50;
+
+            // Use the largest cluster centroid (stickers should cluster near one size)
+            // Simple approach: return the value closest to the median of the top 50%
+            int half = Math.Max(1, sizes.Count / 2);
+            var topHalf = sizes.Skip(sizes.Count - half).ToList();
+            return (int)topHalf.Average();
+        }
+
+        // --- NEW: Fast circularity using HashSet for O(1) pixel lookup ---
+        private double CalculateFastCircularity(ConnectedComponent comp)
+        {
+            var pixelSet = new HashSet<long>();
+            foreach (var p in comp.Pixels)
+                pixelSet.Add((long)p.Y * 100000 + p.X);
+
+            int perimeter = 0;
+            foreach (var p in comp.Pixels)
+            {
+                // 4-connected border check
+                if (!pixelSet.Contains((long)(p.Y - 1) * 100000 + p.X) ||
+                    !pixelSet.Contains((long)(p.Y + 1) * 100000 + p.X) ||
+                    !pixelSet.Contains((long)p.Y * 100000 + (p.X - 1)) ||
+                    !pixelSet.Contains((long)p.Y * 100000 + (p.X + 1)))
+                {
+                    perimeter++;
+                }
+            }
+
+            if (perimeter == 0) return 1.0;
+            double area = comp.PixelCount;
+            return (4.0 * Math.PI * area) / (perimeter * perimeter);
+        }
+
+        // --- NEW: Save debug image helper ---
+        private void SaveDebugImage(Bitmap original, bool[,] mask, string path)
+        {
+            int w = original.Width, h = original.Height;
+            using (Bitmap dbg = new Bitmap(w, h))
+            {
+                for (int y = 0; y < h; y++)
+                    for (int x = 0; x < w; x++)
+                    {
+                        if (mask[y, x])
+                            dbg.SetPixel(x, y, Color.Red);
+                        else
+                        {
+                            Color p = original.GetPixel(x, y);
+                            dbg.SetPixel(x, y, Color.FromArgb(p.R / 4, p.G / 4, p.B / 4));
+                        }
+                    }
+                dbg.Save(path);
+            }
+        }
+        // Find components with strict connectivity requirements
+        private List<ConnectedComponent> FindStrictComponents(bool[,] mask, int width, int height)
         {
             List<ConnectedComponent> components = new List<ConnectedComponent>();
             bool[,] visited = new bool[height, width];
@@ -4308,24 +4439,302 @@ namespace kinectProject
                             visited[p.Y, p.X] = true;
                             comp.Add(p.X, p.Y);
 
-                            // Check all 8 neighbors
-                            for (int dy = -1; dy <= 1; dy++)
-                            {
-                                for (int dx = -1; dx <= 1; dx++)
-                                {
-                                    if (dx == 0 && dy == 0) continue;
-                                    queue.Enqueue(new Point(p.X + dx, p.Y + dy));
-                                }
-                            }
+                            // Use 4-connectivity for stricter component detection
+                            // This prevents connecting separate stickers that touch diagonally
+                            queue.Enqueue(new Point(p.X + 1, p.Y));
+                            queue.Enqueue(new Point(p.X - 1, p.Y));
+                            queue.Enqueue(new Point(p.X, p.Y + 1));
+                            queue.Enqueue(new Point(p.X, p.Y - 1));
                         }
 
-                        components.Add(comp);
+                        // Only keep components with minimum size
+                        if (comp.PixelCount >= 10)
+                        {
+                            components.Add(comp);
+                        }
                     }
                 }
             }
 
             return components;
         }
+
+
+
+        // Calculate color standard deviation within component
+        private double CalculateColorStandardDeviation(ConnectedComponent comp, Bitmap image, Color targetColor)
+        {
+            List<double> colorDistances = new List<double>();
+
+            foreach (var p in comp.Pixels)
+            {
+                Color pixel = image.GetPixel(p.X, p.Y);
+                double distance = Math.Sqrt(
+                    Math.Pow(pixel.R - targetColor.R, 2) +
+                    Math.Pow(pixel.G - targetColor.G, 2) +
+                    Math.Pow(pixel.B - targetColor.B, 2));
+                colorDistances.Add(distance);
+            }
+
+            if (colorDistances.Count == 0) return 0;
+
+            double mean = colorDistances.Average();
+            double sumOfSquares = colorDistances.Sum(d => Math.Pow(d - mean, 2));
+            return Math.Sqrt(sumOfSquares / colorDistances.Count);
+        }
+
+
+        // Check if point is inside component (rough convex hull)
+        private bool IsPointInsideComponent(int x, int y, ConnectedComponent comp)
+        {
+            // Simple point-in-polygon test
+            int intersections = 0;
+            foreach (var p in comp.Pixels)
+            {
+                var next = comp.Pixels.FirstOrDefault(q => q.X > p.X && Math.Abs(q.Y - p.Y) < 2);
+                if (next.X != 0 && next.Y != 0)
+                {
+                    if (IsIntersecting(x, y, p, next))
+                    {
+                        intersections++;
+                    }
+                }
+            }
+            return intersections % 2 == 1;
+        }
+
+        private bool IsIntersecting(int px, int py, Point p1, Point p2)
+        {
+            // Simple ray casting algorithm
+            if (p1.Y > py && p2.Y > py) return false;
+            if (p1.Y < py && p2.Y < py) return false;
+            if (p1.X < px && p2.X < px) return false;
+
+            double xIntersect = p1.X + (double)(py - p1.Y) * (p2.X - p1.X) / (p2.Y - p1.Y);
+            return xIntersect > px;
+        }
+
+        // Calculate edge strength (how well-defined the borders are)
+        private double CalculateEdgeStrength(ConnectedComponent comp, Bitmap image)
+        {
+            double totalGradient = 0;
+            int edgePixels = 0;
+
+            foreach (var p in comp.Pixels)
+            {
+                // Check if this is an edge pixel
+                bool isEdge = false;
+                for (int dy = -1; dy <= 1; dy++)
+                {
+                    for (int dx = -1; dx <= 1; dx++)
+                    {
+                        if (dx == 0 && dy == 0) continue;
+                        int nx = p.X + dx;
+                        int ny = p.Y + dy;
+
+                        if (nx < 0 || nx >= image.Width || ny < 0 || ny >= image.Height)
+                        {
+                            isEdge = true;
+                            break;
+                        }
+
+                        if (!comp.Pixels.Any(pp => pp.X == nx && pp.Y == ny))
+                        {
+                            isEdge = true;
+                            break;
+                        }
+                    }
+                    if (isEdge) break;
+                }
+
+                if (isEdge)
+                {
+                    // Calculate gradient at edge
+                    Color pixel = image.GetPixel(p.X, p.Y);
+
+                    // Simple gradient: difference with neighbor
+                    if (p.X > 0 && p.X < image.Width - 1)
+                    {
+                        Color left = image.GetPixel(p.X - 1, p.Y);
+                        Color right = image.GetPixel(p.X + 1, p.Y);
+                        double gradX = (right.R - left.R) / 255.0;
+
+                        if (p.Y > 0 && p.Y < image.Height - 1)
+                        {
+                            Color top = image.GetPixel(p.X, p.Y - 1);
+                            Color bottom = image.GetPixel(p.X, p.Y + 1);
+                            double gradY = (bottom.R - top.R) / 255.0;
+
+                            totalGradient += Math.Sqrt(gradX * gradX + gradY * gradY);
+                            edgePixels++;
+                        }
+                    }
+                }
+            }
+
+            return edgePixels > 0 ? totalGradient / edgePixels : 0;
+        }
+
+        // Calculate precise center using weighted average
+        private Point CalculatePreciseCenter(ConnectedComponent comp)
+        {
+            double sumX = 0, sumY = 0;
+            int count = comp.Pixels.Count;
+
+            foreach (var p in comp.Pixels)
+            {
+                sumX += p.X;
+                sumY += p.Y;
+            }
+
+            return new Point((int)(sumX / count), (int)(sumY / count));
+        }
+
+        // Visual confirmation of detected stickers
+        // Visual confirmation of detected stickers
+        private void ShowDetectionConfirmation(List<DetectedPoint> points)
+        {
+            if (points.Count == 0) return;
+
+            using (Bitmap bmp = new Bitmap(originalImage))
+            using (Graphics g = Graphics.FromImage(bmp))
+            {
+                foreach (var point in points)
+                {
+                    // Calculate radius based on point size - FIXED: removed undefined 'radius' variable
+                    int pointRadius = point.Radius; // Use point.Radius instead of undefined variable
+                    int circleRadius = pointRadius + 10; // Add padding for visibility
+
+                    // Draw green circle around detected sticker
+                    using (Pen pen = new Pen(Color.Lime, 3))
+                    {
+                        g.DrawEllipse(pen,
+                            point.Location.X - circleRadius,
+                            point.Location.Y - circleRadius,
+                            circleRadius * 2,
+                            circleRadius * 2);
+                    }
+
+                    // Draw ID number
+                    using (System.Drawing.Font font = new System.Drawing.Font("Arial", 12, FontStyle.Bold))
+                    using (Brush brush = new SolidBrush(Color.White))
+                    using (Brush bgBrush = new SolidBrush(Color.FromArgb(128, Color.Black)))
+                    {
+                        string idText = point.ID.ToString();
+                        SizeF textSize = g.MeasureString(idText, font);
+
+                        // Position the ID above the circle
+                        g.FillRectangle(bgBrush,
+                            point.Location.X - textSize.Width / 2 - 2,
+                            point.Location.Y - circleRadius - textSize.Height - 5,
+                            textSize.Width + 4,
+                            textSize.Height + 2);
+
+                        g.DrawString(idText, font, brush,
+                            point.Location.X - textSize.Width / 2,
+                            point.Location.Y - circleRadius - textSize.Height - 3);
+                    }
+
+                    // Optional: Draw confidence score
+                    using (System.Drawing.Font smallFont = new System.Drawing.Font("Arial", 8))
+                    using (Brush confBrush = new SolidBrush(Color.Cyan))
+                    {
+                        string confText = $"{(point.Confidence * 100):F0}%";
+                        SizeF confSize = g.MeasureString(confText, smallFont);
+
+                        g.DrawString(confText, smallFont, confBrush,
+                            point.Location.X - confSize.Width / 2,
+                            point.Location.Y + circleRadius + 5);
+                    }
+                }
+
+                string previewPath = Path.Combine(Path.GetTempPath(), "detection_result.png");
+                bmp.Save(previewPath);
+
+                // Show preview in a temporary form for better visualization
+                using (Form previewForm = new Form())
+                {
+                    previewForm.Text = "Detection Results - Preview";
+                    previewForm.Size = new Size(800, 600);
+                    previewForm.StartPosition = FormStartPosition.CenterParent;
+                    previewForm.BackColor = Color.FromArgb(45, 45, 48);
+
+                    PictureBox previewBox = new PictureBox
+                    {
+                        Dock = DockStyle.Fill,
+                        Image = new Bitmap(bmp),
+                        SizeMode = PictureBoxSizeMode.Zoom
+                    };
+
+                    Button acceptBtn = new Button
+                    {
+                        Text = "✓ Accept Detections",
+                        Dock = DockStyle.Bottom,
+                        Height = 40,
+                        BackColor = Color.FromArgb(0, 122, 204),
+                        ForeColor = Color.White,
+                        FlatStyle = FlatStyle.Flat,
+                        Font = new System.Drawing.Font("Arial", 10, FontStyle.Bold)
+                    };
+
+                    Button rejectBtn = new Button
+                    {
+                        Text = "✗ Reject Detections",
+                        Dock = DockStyle.Bottom,
+                        Height = 40,
+                        BackColor = Color.FromArgb(64, 64, 64),
+                        ForeColor = Color.White,
+                        FlatStyle = FlatStyle.Flat
+                    };
+
+                    Label infoLabel = new Label
+                    {
+                        Text = $"Found {points.Count} stickers. Green circles show detected points.",
+                        Dock = DockStyle.Top,
+                        Height = 30,
+                        TextAlign = ContentAlignment.MiddleCenter,
+                        ForeColor = Color.White,
+                        BackColor = Color.FromArgb(64, 64, 64)
+                    };
+
+                    bool accepted = false;
+
+                    acceptBtn.Click += (s, e) =>
+                    {
+                        accepted = true;
+                        previewForm.Close();
+                    };
+
+                    rejectBtn.Click += (s, e) =>
+                    {
+                        accepted = false;
+                        previewForm.Close();
+                    };
+
+                    previewForm.Controls.Add(previewBox);
+                    previewForm.Controls.Add(acceptBtn);
+                    previewForm.Controls.Add(rejectBtn);
+                    previewForm.Controls.Add(infoLabel);
+
+                    previewForm.ShowDialog(this);
+
+                    if (!accepted)
+                    {
+                        detectedPoints.Clear();
+                        drawingPanel.Invalidate();
+                        MessageBox.Show("Detections rejected. Try adjusting detection parameters.",
+                            "Rejected", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    }
+                    else
+                    {
+                        MessageBox.Show($"Accepted {points.Count} stickers!\n\nPreview saved to:\n{previewPath}",
+                            "Detection Complete", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    }
+                }
+            }
+        }
+
+
         // Fix the RgbToHsv method:
         private HsvColor RgbToHsv(Color rgb)
         {
@@ -4357,54 +4766,6 @@ namespace kinectProject
         }
 
         // Fix the FindStickersFlexible method:
-        private List<ConnectedComponent> FindStickersFlexible(bool[,] mask, int width, int height)
-        {
-            List<ConnectedComponent> components = new List<ConnectedComponent>();
-            bool[,] visited = new bool[height, width];
-            Queue<Point> queue = new Queue<Point>();
-
-            for (int y = 0; y < height; y++)
-            {
-                for (int x = 0; x < width; x++)
-                {
-                    if (mask[y, x] && !visited[y, x])
-                    {
-                        ConnectedComponent comp = new ConnectedComponent();
-                        queue.Clear();
-                        queue.Enqueue(new Point(x, y));
-
-                        while (queue.Count > 0)
-                        {
-                            Point p = queue.Dequeue();
-
-                            if (p.X < 0 || p.X >= width || p.Y < 0 || p.Y >= height ||
-                                visited[p.Y, p.X] || !mask[p.Y, p.X])
-                                continue;
-
-                            visited[p.Y, p.X] = true;
-                            comp.Add(p.X, p.Y);
-
-                            // Check 4-connected neighbors (faster, better for stickers)
-                            queue.Enqueue(new Point(p.X + 1, p.Y));
-                            queue.Enqueue(new Point(p.X - 1, p.Y));
-                            queue.Enqueue(new Point(p.X, p.Y + 1));
-                            queue.Enqueue(new Point(p.X, p.Y - 1));
-
-                            // Also check diagonals for better connectivity
-                            queue.Enqueue(new Point(p.X + 1, p.Y + 1));
-                            queue.Enqueue(new Point(p.X - 1, p.Y - 1));
-                            queue.Enqueue(new Point(p.X + 1, p.Y - 1));
-                            queue.Enqueue(new Point(p.X - 1, p.Y + 1));
-                        }
-
-                        // Keep all components, we'll filter later
-                        components.Add(comp);
-                    }
-                }
-            }
-
-            return components;
-        }
 
         // Fix the SimpleDetectionTest to work immediately:
         private void SimpleDetectionTest()
@@ -4470,21 +4831,7 @@ namespace kinectProject
         }
 
         // Calculate confidence based on color similarity
-        private double CalculateColorConfidence(Color c1, Color c2)
-        {
-            // Calculate Euclidean distance in RGB space
-            double rDiff = c1.R - c2.R;
-            double gDiff = c1.G - c2.G;
-            double bDiff = c1.B - c2.B;
 
-            double distance = Math.Sqrt(rDiff * rDiff + gDiff * gDiff + bDiff * bDiff);
-            double maxDistance = Math.Sqrt(3 * 255 * 255); // Maximum possible distance
-
-            // Convert to confidence (1.0 = perfect match, 0.0 = completely different)
-            return 1.0 - (distance / maxDistance);
-        }
-        // More efficient connected component finding
-       
     
 
         // HSV color structure
