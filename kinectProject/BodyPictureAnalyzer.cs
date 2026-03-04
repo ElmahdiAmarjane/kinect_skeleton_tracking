@@ -981,8 +981,28 @@ namespace kinectProject
 
             foreach (var detectedPoint in detectedPoints)
             {
-                string pointName = $"DP{detectedPoint.ID}";
+                // Generate a default name
+                string pointName = $"P{detectedPoint.ID}";
 
+                // Ask user for custom name if auto-rename is enabled
+                if (autoRenameEnabled)
+                {
+                    using (var renameDialog = new AutoRenameDialog(pointName))
+                    {
+                        if (renameDialog.ShowDialog() == DialogResult.OK)
+                        {
+                            pointName = string.IsNullOrWhiteSpace(renameDialog.NewName) ?
+                                       pointName : renameDialog.NewName.Trim();
+
+                            if (renameDialog.DontAskAgain)
+                            {
+                                autoRenameEnabled = false;
+                            }
+                        }
+                    }
+                }
+
+                // Create the measurement point
                 Measurement measurement = new Measurement(
                     detectedPoint.Location,
                     detectedPoint.Location,
@@ -994,7 +1014,64 @@ namespace kinectProject
             }
 
             UpdateMeasurementsList();
-            UpdateStatus($"Créé {detectedPoints.Count} points de mesure.");
+            UpdateStatus($"Created {detectedPoints.Count} measurement points.");
+            drawingPanel.Invalidate();
+        }
+
+
+        private void HandleManualPointDetection(Point clickPoint)
+        {
+            if (originalImage == null) return;
+
+            // Create a new detected point at click location
+            int newId = detectedPoints.Count > 0 ? detectedPoints.Max(p => p.ID) + 1 : 1;
+
+            // Use current selected color
+            Color pointColor = GetColorFromEnum(selectedColor);
+
+            // Create detected point
+            DetectedPoint newPoint = new DetectedPoint(
+                clickPoint,
+                selectedColor,
+                1.0, // High confidence for manual points
+                10,  // Default radius
+                newId
+            );
+
+            detectedPoints.Add(newPoint);
+
+            // Create measurement from this point
+            string pointName = $"P{newId}";
+
+            if (autoRenameEnabled)
+            {
+                using (var renameDialog = new AutoRenameDialog(pointName))
+                {
+                    if (renameDialog.ShowDialog() == DialogResult.OK)
+                    {
+                        pointName = string.IsNullOrWhiteSpace(renameDialog.NewName) ?
+                                   pointName : renameDialog.NewName.Trim();
+
+                        if (renameDialog.DontAskAgain)
+                        {
+                            autoRenameEnabled = false;
+                        }
+                    }
+                }
+            }
+
+            Measurement measurement = new Measurement(
+                clickPoint,
+                clickPoint,
+                pointName,
+                MeasurementType.Point,
+                idCounter++);
+
+            measurements.Add(measurement);
+
+            UpdateMeasurementsList();
+            drawingPanel.Invalidate();
+            UpdateStatus($"Manual point added: {pointName}");
         }
 
 
@@ -2313,6 +2390,7 @@ namespace kinectProject
 
             return angles;
         }
+    
         private void DrawIntersectionPoints(Graphics g)
         {
             foreach (var ip in intersectionPoints)
@@ -3830,54 +3908,54 @@ namespace kinectProject
             PointF imagePointF = TransformPointToImage(e.Location);
             Point imagePoint = new Point((int)imagePointF.X, (int)imagePointF.Y);
 
-            // 1. D'abord vérifier si on est en mode création de ligne entre points
+            /* =========================================================
+             * 1. MODE CRÉATION DE LIGNE ENTRE POINTS (PRIORITAIRE)
+             * ========================================================= */
             if (isCreatingLineBetweenPoints && e.Button == MouseButtons.Left)
             {
                 HandlePointConnection(imagePoint);
                 return;
             }
 
-            // 2. Ensuite vérifier les intersections (clic droit)
-         
-
-            // Détection des points d'intersection - Clic Droit
+            /* =========================================================
+             * 2. CLIC DROIT : INTERSECTIONS + POINTS
+             * ========================================================= */
             if (e.Button == MouseButtons.Right)
             {
-                // Chercher un point d'intersection proche
+                // a) Vérifier les intersections
                 var intersection = FindIntersectionAtPoint(imagePoint);
-
                 if (intersection.HasValue)
                 {
                     selectedIntersection = intersection;
                     ShowAngleContextMenu(e.Location, intersection.Value);
                     return;
                 }
+
+                // b) Vérifier les mesures (points inclus)
+                int index = FindMeasurementAtPoint(imagePoint);
+                if (index >= 0)
+                {
+                    Measurement m = measurements[index];
+                    if (m.Type == MeasurementType.Point)
+                    {
+                        ShowPointContextMenu(e.Location, m);
+                        return;
+                    }
+                }
+
+                return;
             }
 
-
-
-
-            // FIX: Don't handle measurement creation if we're dragging grid
+            /* =========================================================
+             * 3. DRAG GRID → NE RIEN FAIRE D’AUTRE
+             * ========================================================= */
             if (isDraggingGrid) return;
 
-            // Handle measurement creation
-            if (currentTool != ToolMode.None && e.Button == MouseButtons.Left)
+            /* =========================================================
+             * 4. MODE PICKING DE COULEUR
+             * ========================================================= */
+            if (isPickingReferenceColor && e.Button == MouseButtons.Left)
             {
-                HandleMeasurementCreation(imagePoint);
-            }
-
-            // Handle selection for moving, deleting, or renaming
-            if (currentEditMode != EditMode.None && currentEditMode != EditMode.Normal && e.Button == MouseButtons.Left)
-            {
-                HandleSelection(imagePoint);
-            }
-
-            // Handle color picking mode
-            if (isPickingReferenceColor && originalImage != null && e.Button == MouseButtons.Left)
-            {
-                 imagePointF = TransformPointToImage(e.Location);
-                 imagePoint = new Point((int)imagePointF.X, (int)imagePointF.Y);
-
                 using (Bitmap bmp = new Bitmap(originalImage))
                 {
                     if (imagePoint.X >= 0 && imagePoint.X < bmp.Width &&
@@ -3887,18 +3965,59 @@ namespace kinectProject
                         referenceColor = pickedColor;
                         pickedPointLocation = imagePoint;
 
-                        // Show color preview and detection options
                         ShowColorPreviewAndDetect(pickedColor, imagePoint);
                     }
                 }
 
                 isPickingReferenceColor = false;
                 drawingPanel.Cursor = Cursors.Default;
+                return;
+            }
+
+            /* =========================================================
+             * 5. AJOUT MANUEL DE POINT
+             * ========================================================= */
+            if (currentTool == ToolMode.Point && e.Button == MouseButtons.Left)
+            {
+                HandleManualPointDetection(imagePoint);
+                return;
+            }
+
+            /* =========================================================
+             * 6. CRÉATION DE MESURES (LIGNE, ANGLE, DISTANCE, ETC.)
+             * ========================================================= */
+            if (currentTool != ToolMode.None && e.Button == MouseButtons.Left)
+            {
+                HandleMeasurementCreation(imagePoint);
+                return;
+            }
+
+            /* =========================================================
+             * 7. MODE ÉDITION (DÉPLACER / RENOMMER / SUPPRIMER)
+             * ========================================================= */
+            if (currentEditMode != EditMode.None &&
+                currentEditMode != EditMode.Normal &&
+                e.Button == MouseButtons.Left)
+            {
+                HandleSelection(imagePoint);
             }
         }
 
 
+        private void ClearDetectedPoints()
+        {
+            // Remove all point measurements that came from detected points
+            measurements.RemoveAll(m =>
+                m.Type == MeasurementType.Point &&
+                detectedPoints.Any(dp => dp.Location == m.Start));
 
+            detectedPoints.Clear();
+
+            FindAllIntersections();
+            UpdateMeasurementsList();
+            drawingPanel.Invalidate();
+            UpdateStatus("All detected points cleared");
+        }
 
         // New method to show color preview
         private void ShowColorPreviewAndDetect(Color pickedColor, Point pickPoint)
@@ -5806,8 +5925,26 @@ namespace kinectProject
             {
                 if (currentEditMode == EditMode.Delete)
                 {
+                    // Get the measurement before deleting
+                    Measurement m = measurements[index];
+
+                    // If it's a point measurement, also remove from detectedPoints if present
+                    if (m.Type == MeasurementType.Point)
+                    {
+                        // Find and remove from detectedPoints
+                        var detectedPoint = detectedPoints.FirstOrDefault(dp =>
+                            dp.Location == m.Start && Math.Abs(dp.Location.X - m.Start.X) < 5);
+
+                        if (detectedPoint.ID != 0)
+                        {
+                            detectedPoints.Remove(detectedPoint);
+                        }
+                    }
+
+                    // Remove from measurements
                     measurements.RemoveAt(index);
 
+                    // Recalculate intersections
                     FindAllIntersections();
 
                     UpdateMeasurementsList();
@@ -5818,7 +5955,7 @@ namespace kinectProject
                 {
                     RenameMeasurement(index);
                 }
-                // Move logic is now handled in MouseDown event
+                // Move logic is handled in MouseDown
             }
             else
             {
@@ -5827,7 +5964,6 @@ namespace kinectProject
                 drawingPanel.Invalidate();
             }
         }
-
 
 
         private Point CalculatePerpendicularFoot(Measurement baseLine, Point point)
@@ -5887,28 +6023,94 @@ namespace kinectProject
             string currentName = m.Name;
             string prompt = "Enter new name for measurement:";
 
-            // Special prompt for intersection angles
-            if (m.AngleValue.HasValue)
-            {
-                string angleInfo = $"Current angle: {m.AngleValue:F1}°";
-                if (m.RelatedLineIDs != null && m.RelatedLineIDs.Count >= 2)
-                {
-                    angleInfo += $" (between L{m.RelatedLineIDs[0]} and L{m.RelatedLineIDs[1]})";
-                }
-                prompt = $"Enter new name for intersection angle:\n{angleInfo}";
-            }
-
             using (var renameDialog = new CustomRenameDialog(currentName, prompt))
             {
                 if (renameDialog.ShowDialog() == DialogResult.OK)
                 {
-                    m.Name = renameDialog.NewName;
+                    string newName = renameDialog.NewName;
+
+                    // Update measurement
+                    m.Name = newName;
                     measurements[index] = m;
+
+                    // If this is a point measurement, update the corresponding detected point if exists
+                    if (m.Type == MeasurementType.Point)
+                    {
+                        var detectedPoint = detectedPoints.FirstOrDefault(dp =>
+                            dp.Location == m.Start && Math.Abs(dp.Location.X - m.Start.X) < 5);
+
+                        // Detected points don't have a Name property, but we could add one if needed
+                        // For now, we just update the measurement
+                    }
+
                     UpdateMeasurementsList();
                     drawingPanel.Invalidate();
-                    UpdateStatus($"Measurement renamed to {m.Name}");
+                    UpdateStatus($"Measurement renamed to {newName}");
                 }
             }
+        }
+
+        private void ShowPointContextMenu(Point screenLocation, Measurement point)
+        {
+            ContextMenuStrip contextMenu = new ContextMenuStrip();
+            contextMenu.BackColor = Color.FromArgb(62, 62, 64);
+            contextMenu.ForeColor = Color.White;
+            contextMenu.Renderer = new CustomToolStripRenderer();
+
+            // Title
+            ToolStripMenuItem titleItem = new ToolStripMenuItem($"📌 {point.Name} (ID: {point.ID})");
+            titleItem.Enabled = false;
+            titleItem.Font = new System.Drawing.Font("Arial", 9, FontStyle.Bold);
+            contextMenu.Items.Add(titleItem);
+
+            contextMenu.Items.Add(new ToolStripSeparator());
+
+            // Actions
+            ToolStripMenuItem renameItem = new ToolStripMenuItem("✏️ Rename");
+            renameItem.Click += (s, ev) =>
+            {
+                int index = measurements.FindIndex(m => m.ID == point.ID);
+                if (index >= 0) RenameMeasurement(index);
+            };
+            contextMenu.Items.Add(renameItem);
+
+            ToolStripMenuItem deleteItem = new ToolStripMenuItem("🗑️ Delete");
+            deleteItem.Click += (s, ev) =>
+            {
+                int index = measurements.FindIndex(m => m.ID == point.ID);
+                if (index >= 0)
+                {
+                    measurements.RemoveAt(index);
+
+                    // Also remove from detectedPoints if it's a detected point
+                    var detectedPoint = detectedPoints.FirstOrDefault(dp =>
+                        dp.Location == point.Start && Math.Abs(dp.Location.X - point.Start.X) < 5);
+
+                    if (detectedPoint.ID != 0)
+                    {
+                        detectedPoints.Remove(detectedPoint);
+                    }
+
+                    FindAllIntersections();
+                    UpdateMeasurementsList();
+                    drawingPanel.Invalidate();
+                }
+            };
+            contextMenu.Items.Add(deleteItem);
+
+            contextMenu.Items.Add(new ToolStripSeparator());
+
+            ToolStripMenuItem copyItem = new ToolStripMenuItem("📋 Copy Coordinates");
+            copyItem.Click += (s, ev) =>
+            {
+                string coords = $"({point.Start.X}, {point.Start.Y})";
+                Clipboard.SetText(coords);
+                UpdateStatus($"Coordinates copied: {coords}");
+            };
+            contextMenu.Items.Add(copyItem);
+
+            // Show the menu
+            contextMenu.Show(drawingPanel, screenLocation);
         }
 
         public class CustomRenameDialog : Form
@@ -6060,15 +6262,21 @@ namespace kinectProject
 
         private int FindMeasurementAtPoint(Point point)
         {
-            // First check for points and lines
+            const int tolerance = 8;
+
+            // First check regular measurements
             for (int i = 0; i < measurements.Count; i++)
             {
                 if (IsMeasurementAtPoint(measurements[i], point))
                     return i;
             }
 
-            // Then specifically check for angle segments
-            return FindAngleMeasurementAtPoint(point);
+            // Then check angle segments
+            int angleIndex = FindAngleMeasurementAtPoint(point);
+            if (angleIndex >= 0)
+                return angleIndex;
+
+            return -1;
         }
 
         private bool IsMeasurementAtPoint(Measurement m, Point point)
@@ -6377,6 +6585,7 @@ namespace kinectProject
         private void BtnClear_Click(object sender, EventArgs e)
         {
             measurements.Clear();
+            detectedPoints.Clear(); // Also clear detected points
             measurementsList.Items.Clear();
             measurementCounter = 1;
             idCounter = 1;
@@ -6387,16 +6596,16 @@ namespace kinectProject
             pixelToRealRatio = 1.0f;
             isSettingReference = false;
 
-
-            // AUGMENTATION: Effacer aussi les intersections
+            // Clear intersections
             intersectionPoints.Clear();
             intersectionCounter = 1;
             selectedIntersection = null;
             hoveredIntersection = null;
 
-            UpdateStatus("All measurements cleared.");
+            UpdateStatus("All measurements and points cleared.");
             drawingPanel.Invalidate();
         }
+
 
         private void BtnToggleGrid_Click(object sender, EventArgs e)
         {
