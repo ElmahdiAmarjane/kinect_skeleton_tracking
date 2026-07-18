@@ -117,17 +117,10 @@
     <Reference Include="WindowsBase" />
   </ItemGroup>
   <ItemGroup>
-    <Compile Include="AutoRenameDialog.cs">
+    <Compile Include="UI\Dialogs\FoReferenceInputDialog.cs">
       <SubType>Form</SubType>
     </Compile>
-    <Compile Include="CurveData.cs" />
-    <Compile Include="CurveDataViewer.cs">
-      <SubType>Form</SubType>
-    </Compile>
-    <Compile Include="FoReferenceInputDialog.cs">
-      <SubType>Form</SubType>
-    </Compile>
-    <Compile Include="FoReferenceInputDialog.Designer.cs">
+    <Compile Include="UI\Dialogs\FoReferenceInputDialog.Designer.cs">
       <DependentUpon>FoReferenceInputDialog.cs</DependentUpon>
     </Compile>
     <Compile Include="Form1.cs">
@@ -142,41 +135,68 @@
     <Compile Include="BodyPictureAnalyzer.Designer.cs">
       <DependentUpon>BodyPictureAnalyzer.cs</DependentUpon>
     </Compile>
-    <Compile Include="MultiCurveViewer.cs">
-      <SubType>Form</SubType>
-    </Compile>
-    <Compile Include="PdfInputForm.cs">
-      <SubType>Form</SubType>
-    </Compile>
-    <Compile Include="PostureAnalyzer.cs" />
-    <Compile Include="previewImage.cs">
-      <SubType>Form</SubType>
-    </Compile>
-    <Compile Include="previewImage.Designer.cs">
-      <DependentUpon>previewImage.cs</DependentUpon>
-    </Compile>
+    <Compile Include="Models\ConnectedComponent.cs" />
+    <Compile Include="Models\Enums.cs" />
+    <Compile Include="Models\SpineCurveData.cs" />
+    <Compile Include="Models\Structures.cs" />
+    <Compile Include="Services\PostureAnalyzer.cs" />
     <Compile Include="Program.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
-    <Compile Include="ReferenceInputDialog.cs">
+    <Compile Include="Services\PictureAnalyzerServices\CalculationService.cs" />
+    <Compile Include="Services\PictureAnalyzerServices\DetectionService.cs" />
+    <Compile Include="Services\FormServices\ColorProcessingService.cs" />
+    <Compile Include="Services\FormServices\DepthProcessingService.cs" />
+    <Compile Include="Services\FormServices\KinectService.cs" />
+    <Compile Include="Services\FormServices\PdfReportService.cs" />
+    <Compile Include="Services\FormServices\SpineCurveService.cs" />
+    <Compile Include="Services\PictureAnalyzerServices\ImageProcessingService.cs" />
+    <Compile Include="Services\PictureAnalyzerServices\IntersectionService.cs" />
+    <Compile Include="Services\PictureAnalyzerServices\MeasurementService.cs" />
+    <Compile Include="Services\PictureAnalyzerServices\PdfExportService.cs" />
+    <Compile Include="UI\Controles\CustomColorTable.cs" />
+    <Compile Include="UI\Controles\CustomToolStripRenderer.cs" />
+    <Compile Include="UI\Controles\DoubleBufferedPanel.cs">
+      <SubType>Component</SubType>
+    </Compile>
+    <Compile Include="UI\Controles\RoundedButton.cs" />
+    <Compile Include="UI\Dialogs\AutoRenameDialog.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="UI\Dialogs\AxisSelectionDialog.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="UI\Dialogs\CustomRenameDialog.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="UI\Dialogs\DetectionSettingsDialog.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="UI\Dialogs\PdfInputForm.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="UI\Dialogs\PreviewForm.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="UI\Dialogs\ReferenceInputDialog.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="UI\Dialogs\RenameDialog.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="UI\Viewers\CurveDataViewer.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="UI\Viewers\MultiCurveViewer.cs">
       <SubType>Form</SubType>
     </Compile>
     <EmbeddedResource Include="BodyPictureAnalyzer.resx">
       <DependentUpon>BodyPictureAnalyzer.cs</DependentUpon>
     </EmbeddedResource>
-    <EmbeddedResource Include="CurveDataViewer.resx">
-      <DependentUpon>CurveDataViewer.cs</DependentUpon>
-    </EmbeddedResource>
-    <EmbeddedResource Include="FoReferenceInputDialog.resx">
+    <EmbeddedResource Include="UI\Dialogs\FoReferenceInputDialog.resx">
       <DependentUpon>FoReferenceInputDialog.cs</DependentUpon>
     </EmbeddedResource>
     <EmbeddedResource Include="Form1.resx">
       <DependentUpon>Form1.cs</DependentUpon>
-    </EmbeddedResource>
-    <EmbeddedResource Include="MultiCurveViewer.resx">
-      <DependentUpon>MultiCurveViewer.cs</DependentUpon>
-    </EmbeddedResource>
-    <EmbeddedResource Include="PdfInputForm.resx">
-      <DependentUpon>PdfInputForm.cs</DependentUpon>
     </EmbeddedResource>
     <EmbeddedResource Include="Properties\Resources.resx">
       <Generator>ResXFileCodeGenerator</Generator>
@@ -187,6 +207,12 @@
       <AutoGen>True</AutoGen>
       <DependentUpon>Resources.resx</DependentUpon>
     </Compile>
+    <EmbeddedResource Include="UI\Dialogs\RenameDialog.resx">
+      <DependentUpon>RenameDialog.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="UI\Viewers\CurveDataViewer.resx">
+      <DependentUpon>CurveDataViewer.cs</DependentUpon>
+    </EmbeddedResource>
     <None Include="packages.config" />
     <None Include="Properties\Settings.settings">
       <Generator>SettingsSingleFileGenerator</Generator>

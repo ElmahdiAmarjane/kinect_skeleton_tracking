@@ -1,7 +1,7 @@
 ﻿using System;
 using System.Windows.Forms;
 
-namespace KinectProject
+namespace kinectProject
 {
     internal static class Program
     {
