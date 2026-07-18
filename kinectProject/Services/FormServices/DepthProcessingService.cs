@@ -116,6 +116,7 @@ namespace kinectProject
 
         private void UpdateBitmap(int width, int height)
         {
+            // ✅ Lock and update the existing bitmap instead of creating new one
             BitmapData bitmapData = depthBitmap.LockBits(
                 new Rectangle(0, 0, width, height),
                 ImageLockMode.WriteOnly,
@@ -123,6 +124,13 @@ namespace kinectProject
 
             Marshal.Copy(depthPixels, 0, bitmapData.Scan0, depthPixels.Length);
             depthBitmap.UnlockBits(bitmapData);
+        }
+
+        // Add a method to get a safe copy
+        public Bitmap GetSafeDepthBitmap()
+        {
+            if (depthBitmap == null) return null;
+            return new Bitmap(depthBitmap);
         }
 
         public Color HsvToRgb(double h, double s, double v)

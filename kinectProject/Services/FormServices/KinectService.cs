@@ -15,17 +15,23 @@ namespace kinectProject
         public bool IsAvailable => kinectSensor != null && kinectSensor.IsAvailable;
 
         public event EventHandler<MultiSourceFrameArrivedEventArgs> FrameArrived;
+        public event EventHandler<bool> ConnectionStatusChanged; // ✅ New event for status
+
+        private bool isInitializing = true;
+        private bool wasAvailable = false;
+        private DateTime lastStatusChange = DateTime.MinValue;
+        private const int StatusCooldownMs = 2000; // 2 seconds cooldown between status changes
 
         public bool Initialize()
         {
             kinectSensor = KinectSensor.GetDefault();
             if (kinectSensor == null)
             {
-                MessageBox.Show("Aucun capteur Kinect détecté.", "Erreur Kinect",
-                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                ConnectionStatusChanged?.Invoke(this, false);
                 return false;
             }
 
+            isInitializing = true;
             kinectSensor.Open();
             coordinateMapper = kinectSensor.CoordinateMapper;
 
@@ -39,15 +45,30 @@ namespace kinectProject
 
             kinectSensor.IsAvailableChanged += KinectSensor_IsAvailableChanged;
 
+            wasAvailable = kinectSensor.IsAvailable;
+            isInitializing = false;
+
+            ConnectionStatusChanged?.Invoke(this, true);
+
             return true;
         }
 
         private void KinectSensor_IsAvailableChanged(object sender, IsAvailableChangedEventArgs e)
         {
-            if (!e.IsAvailable)
+            // Ignore events during initialization
+            if (isInitializing) return;
+
+            // Cooldown to prevent rapid status changes
+            if ((DateTime.Now - lastStatusChange).TotalMilliseconds < StatusCooldownMs)
+                return;
+
+            lastStatusChange = DateTime.Now;
+
+            // Only notify if status actually changed
+            if (e.IsAvailable != wasAvailable)
             {
-                MessageBox.Show("Connexion perdue avec le capteur Kinect.", "Alerte",
-                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                wasAvailable = e.IsAvailable;
+                ConnectionStatusChanged?.Invoke(this, e.IsAvailable);
             }
         }
 
@@ -82,6 +103,7 @@ namespace kinectProject
 
             if (kinectSensor != null)
             {
+                kinectSensor.IsAvailableChanged -= KinectSensor_IsAvailableChanged;
                 kinectSensor.Close();
                 kinectSensor = null;
             }

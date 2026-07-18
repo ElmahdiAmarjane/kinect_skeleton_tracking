@@ -83,7 +83,10 @@ namespace kinectProject
             Marshal.Copy(alignedPixels, 0, bmpData.Scan0, alignedPixels.Length);
             alignedBitmap.UnlockBits(bmpData);
 
-            return alignedBitmap;
+            // ✅ Return a clone to avoid cross-thread issues
+            Bitmap result = new Bitmap(alignedBitmap);
+            alignedBitmap.Dispose();
+            return result;
         }
 
         public Bitmap CropCenter(Bitmap source, int targetWidth, int targetHeight)

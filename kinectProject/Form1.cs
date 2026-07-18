@@ -68,6 +68,10 @@ namespace kinectProject
             {
                 // Initialize services
                 kinectService = new KinectService();
+
+                // ✅ Subscribe to connection status changes
+                kinectService.ConnectionStatusChanged += KinectService_ConnectionStatusChanged;
+
                 if (!kinectService.Initialize())
                 {
                     Application.Exit();
@@ -101,6 +105,41 @@ namespace kinectProject
             {
                 MessageBox.Show("Error: " + ex.Message, "Initialization Error",
                     MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+
+        // ✅ New method to handle status changes
+        private void KinectService_ConnectionStatusChanged(object sender, bool isAvailable)
+        {
+            this.BeginInvoke((Action)(() =>
+            {
+                if (isAvailable)
+                {
+                    UpdateStatusBar("Kinect connecté - Prêt", Color.LightGreen);
+                }
+                else
+                {
+                    UpdateStatusBar("Kinect déconnecté - En attente...", Color.OrangeRed);
+                }
+            }));
+        }
+
+        // ✅ Method to update status bar
+        private void UpdateStatusBar(string message, Color color)
+        {
+            // Find the status strip and update
+            foreach (Control control in this.Controls)
+            {
+                if (control is StatusStrip statusStrip)
+                {
+                    if (statusStrip.Items.Count > 1 && statusStrip.Items[1] is ToolStripStatusLabel kinectLabel)
+                    {
+                        kinectLabel.Text = message;
+                        kinectLabel.ForeColor = color;
+                    }
+                    break;
+                }
             }
         }
 
@@ -299,7 +338,8 @@ namespace kinectProject
                 Dock = DockStyle.Bottom,
                 BackColor = Color.FromArgb(40, 40, 60),
                 ForeColor = Color.White,
-                RenderMode = ToolStripRenderMode.Professional
+                RenderMode = ToolStripRenderMode.Professional,
+                Name = "mainStatusStrip" // ✅ Give it a name
             };
 
             ToolStripStatusLabel statusLabel = new ToolStripStatusLabel
@@ -311,10 +351,11 @@ namespace kinectProject
 
             ToolStripStatusLabel kinectStatus = new ToolStripStatusLabel
             {
-                Text = "",
-                ForeColor = Color.LightGreen,
+                Text = "Kinect: Initialisation...",
+                ForeColor = Color.Yellow,
                 Font = new Font("Segoe UI", 9f, FontStyle.Bold),
-                Alignment = ToolStripItemAlignment.Right
+                Alignment = ToolStripItemAlignment.Right,
+                Name = "kinectStatusLabel" // ✅ Give it a name
             };
 
             statusStrip.Items.Add(statusLabel);
@@ -356,6 +397,8 @@ namespace kinectProject
 
         #region Kinect Frame Processing
 
+        // In Form1.cs, replace the KinectService_FrameArrived method:
+
         private void KinectService_FrameArrived(object sender, MultiSourceFrameArrivedEventArgs e)
         {
             if ((DateTime.Now - lastFrameTime).TotalMilliseconds < 1000 / TargetFrameRate)
@@ -378,7 +421,11 @@ namespace kinectProject
                         depthService.ProcessDepthFrameWithBodyContext(depthFrame, trackedBody);
                         spineService.DrawSpineOnBitmap(trackedBody, depthService.DepthBitmap);
                         spineAngle = spineService.CalculateSpineAngle(trackedBody);
-                        DrawSpineAngleInInfoBox(spineAngle);
+
+                        this.BeginInvoke((Action)(() =>
+                        {
+                            DrawSpineAngleInInfoBox(spineAngle);
+                        }));
                     }
                 }
             }
@@ -394,19 +441,35 @@ namespace kinectProject
                     {
                         this.BeginInvoke((Action)(() =>
                         {
-                            normalPictureBox.Image?.Dispose();
+                            var oldImage = normalPictureBox.Image;
                             normalPictureBox.Image = aligned;
+                            if (oldImage != null && oldImage != aligned)
+                            {
+                                oldImage.Dispose();
+                            }
                         }));
                     }
                 }
             }
 
             // Update depth picture box
-            this.BeginInvoke((Action)(() =>
+            Bitmap safeDepth = depthService.GetSafeDepthBitmap();
+
+            if (safeDepth != null)
             {
-                depthPictureBox.Image?.Dispose();
-                depthPictureBox.Image = depthService.DepthBitmap;
-            }));
+                this.BeginInvoke((Action)(() =>
+                {
+                    var oldImage = depthPictureBox.Image;
+                    depthPictureBox.Image = safeDepth;
+                    if (oldImage != null)
+                    {
+                        oldImage.Dispose();
+                    }
+                }));
+            }
+
+            // ✅ Just set to null - no Dispose needed
+            // multiSourceFrame = null;
         }
 
         #endregion
