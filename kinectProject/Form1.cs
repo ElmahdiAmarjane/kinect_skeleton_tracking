@@ -66,15 +66,16 @@ namespace kinectProject
         {
             try
             {
-                // Initialize services
                 kinectService = new KinectService();
-
-                // ✅ Subscribe to connection status changes
                 kinectService.ConnectionStatusChanged += KinectService_ConnectionStatusChanged;
 
                 if (!kinectService.Initialize())
                 {
-                    Application.Exit();
+                    // ✅ Just update status, no popup
+                    UpdateStatusBar("Kinect non détecté - Vérifiez la connexion", Color.Red);
+
+                    // ✅ Instead of Application.Exit(), let the user see the status
+                    // The watchdog will update if sensor becomes available
                     return;
                 }
 
@@ -83,17 +84,14 @@ namespace kinectProject
                 spineService = new SpineCurveService(kinectService.CoordinateMapper);
                 pdfReportService = new PdfReportService();
 
-                // Subscribe to Kinect frames
                 kinectService.FrameArrived += KinectService_FrameArrived;
 
-                // Setup UI
                 SetupPictureBoxes();
                 SetupSidePanel();
                 SetupTopPanel();
                 SetupStatusStrip();
                 SetupContextMenu();
 
-                // Main form styling
                 this.BackColor = Color.FromArgb(45, 45, 60);
                 this.Text = "Kinect Body Analysis Pro - Posture Assessment System";
                 this.Font = new Font("Segoe UI", 9f, FontStyle.Regular);
@@ -103,46 +101,43 @@ namespace kinectProject
             }
             catch (Exception ex)
             {
-                MessageBox.Show("Error: " + ex.Message, "Initialization Error",
-                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+                // ✅ Only show popup for unexpected errors
+                UpdateStatusBar("Erreur: " + ex.Message, Color.Red);
             }
         }
-
-
-        // ✅ New method to handle status changes
         private void KinectService_ConnectionStatusChanged(object sender, bool isAvailable)
         {
             this.BeginInvoke((Action)(() =>
             {
                 if (isAvailable)
                 {
-                    UpdateStatusBar("Kinect connecté - Prêt", Color.LightGreen);
+                    UpdateStatusBar("Kinect connecté - En direct", Color.LightGreen);
                 }
                 else
                 {
-                    UpdateStatusBar("Kinect déconnecté - En attente...", Color.OrangeRed);
+                    UpdateStatusBar("Kinect déconnecté - Vérifiez la connexion", Color.OrangeRed);
                 }
             }));
         }
 
-        // ✅ Method to update status bar
         private void UpdateStatusBar(string message, Color color)
         {
-            // Find the status strip and update
             foreach (Control control in this.Controls)
             {
                 if (control is StatusStrip statusStrip)
                 {
-                    if (statusStrip.Items.Count > 1 && statusStrip.Items[1] is ToolStripStatusLabel kinectLabel)
+                    foreach (ToolStripItem item in statusStrip.Items)
                     {
-                        kinectLabel.Text = message;
-                        kinectLabel.ForeColor = color;
+                        if (item is ToolStripStatusLabel label && label.Name == "kinectStatusLabel")
+                        {
+                            label.Text = message;
+                            label.ForeColor = color;
+                            return;
+                        }
                     }
-                    break;
                 }
             }
         }
-
         #endregion
 
         #region UI Setup Methods
@@ -330,7 +325,6 @@ namespace kinectProject
             toolTip.SetToolTip(btnImportData, "Importer des données de courbe sauvegardées");
             toolTip.SetToolTip(btnNormalImage, "Sauvegarder l'image couleur normale");
         }
-
         private void SetupStatusStrip()
         {
             StatusStrip statusStrip = new StatusStrip
@@ -338,8 +332,7 @@ namespace kinectProject
                 Dock = DockStyle.Bottom,
                 BackColor = Color.FromArgb(40, 40, 60),
                 ForeColor = Color.White,
-                RenderMode = ToolStripRenderMode.Professional,
-                Name = "mainStatusStrip" // ✅ Give it a name
+                RenderMode = ToolStripRenderMode.Professional
             };
 
             ToolStripStatusLabel statusLabel = new ToolStripStatusLabel
@@ -351,18 +344,17 @@ namespace kinectProject
 
             ToolStripStatusLabel kinectStatus = new ToolStripStatusLabel
             {
-                Text = "Kinect: Initialisation...",
+                Text = "Kinect: En attente...", // ✅ Initial text
                 ForeColor = Color.Yellow,
                 Font = new Font("Segoe UI", 9f, FontStyle.Bold),
                 Alignment = ToolStripItemAlignment.Right,
-                Name = "kinectStatusLabel" // ✅ Give it a name
+                Name = "kinectStatusLabel"
             };
 
             statusStrip.Items.Add(statusLabel);
             statusStrip.Items.Add(kinectStatus);
             this.Controls.Add(statusStrip);
         }
-
         private void SetupContextMenu()
         {
             ContextMenuStrip curveMenu = new ContextMenuStrip();

@@ -12,27 +12,49 @@ namespace kinectProject
 
         public KinectSensor Sensor => kinectSensor;
         public CoordinateMapper CoordinateMapper => coordinateMapper;
-        public bool IsAvailable => kinectSensor != null && kinectSensor.IsAvailable;
+        public bool IsAvailable => kinectSensor != null && kinectSensor.IsOpen;
 
         public event EventHandler<MultiSourceFrameArrivedEventArgs> FrameArrived;
-        public event EventHandler<bool> ConnectionStatusChanged; // ✅ New event for status
+        public event EventHandler<bool> ConnectionStatusChanged;
 
         private bool isInitializing = true;
         private bool wasAvailable = false;
-        private DateTime lastStatusChange = DateTime.MinValue;
-        private const int StatusCooldownMs = 2000; // 2 seconds cooldown between status changes
+        private bool connectionNotified = false; // ✅ Track if we already notified disconnect
+        private DateTime lastFrameReceived = DateTime.MinValue;
+        private DateTime lastRestartAttempt = DateTime.MinValue; // ✅ Prevent rapid restarts
+        private const int FrameTimeoutMs = 5000; // ✅ Shorter timeout
+        private const int RestartCooldownMs = 10000; // ✅ 10s between restart attempts
+        private const int MaxRestartAttempts = 3; // ✅ Limit restart attempts
+
+        private System.Windows.Forms.Timer watchdogTimer;
+        private const int WatchdogIntervalMs = 2000;
+        private bool firstFrameReceived = false;
+        private int restartAttempts = 0; // ✅ Count restart attempts
 
         public bool Initialize()
         {
             kinectSensor = KinectSensor.GetDefault();
             if (kinectSensor == null)
             {
-                ConnectionStatusChanged?.Invoke(this, false);
                 return false;
             }
 
             isInitializing = true;
-            kinectSensor.Open();
+
+            try
+            {
+                kinectSensor.Open();
+
+                if (!kinectSensor.IsOpen)
+                {
+                    return false;
+                }
+            }
+            catch (Exception)
+            {
+                return false;
+            }
+
             coordinateMapper = kinectSensor.CoordinateMapper;
 
             multiSourceFrameReader = kinectSensor.OpenMultiSourceFrameReader(
@@ -40,35 +62,126 @@ namespace kinectProject
 
             multiSourceFrameReader.MultiSourceFrameArrived += (s, e) =>
             {
+                lastFrameReceived = DateTime.Now;
+                restartAttempts = 0; // ✅ Reset attempts when frames arrive
+
+                if (!firstFrameReceived)
+                {
+                    firstFrameReceived = true;
+                    isInitializing = false;
+                    NotifyConnected();
+                }
+
                 FrameArrived?.Invoke(s, e);
             };
 
-            kinectSensor.IsAvailableChanged += KinectSensor_IsAvailableChanged;
+            watchdogTimer = new System.Windows.Forms.Timer();
+            watchdogTimer.Interval = WatchdogIntervalMs;
+            watchdogTimer.Tick += WatchdogTimer_Tick;
+            watchdogTimer.Start();
 
-            wasAvailable = kinectSensor.IsAvailable;
-            isInitializing = false;
-
-            ConnectionStatusChanged?.Invoke(this, true);
+            lastFrameReceived = DateTime.Now;
 
             return true;
         }
 
-        private void KinectSensor_IsAvailableChanged(object sender, IsAvailableChangedEventArgs e)
+        private void NotifyConnected()
         {
-            // Ignore events during initialization
+            if (!wasAvailable || !connectionNotified)
+            {
+                wasAvailable = true;
+                connectionNotified = true;
+                ConnectionStatusChanged?.Invoke(this, true);
+            }
+        }
+
+        private void NotifyDisconnected()
+        {
+            if (wasAvailable || connectionNotified)
+            {
+                wasAvailable = false;
+                connectionNotified = true;
+                ConnectionStatusChanged?.Invoke(this, false);
+            }
+        }
+
+        private void WatchdogTimer_Tick(object sender, EventArgs e)
+        {
             if (isInitializing) return;
 
-            // Cooldown to prevent rapid status changes
-            if ((DateTime.Now - lastStatusChange).TotalMilliseconds < StatusCooldownMs)
-                return;
+            double timeSinceLastFrame = (DateTime.Now - lastFrameReceived).TotalMilliseconds;
+            double timeSinceLastRestart = (DateTime.Now - lastRestartAttempt).TotalMilliseconds;
 
-            lastStatusChange = DateTime.Now;
+            // ✅ Check if sensor is still physically connected
+            bool sensorPhysicallyPresent = kinectSensor != null && kinectSensor.IsOpen;
 
-            // Only notify if status actually changed
-            if (e.IsAvailable != wasAvailable)
+            if (!sensorPhysicallyPresent)
             {
-                wasAvailable = e.IsAvailable;
-                ConnectionStatusChanged?.Invoke(this, e.IsAvailable);
+                // Sensor is gone - notify and stop trying
+                NotifyDisconnected();
+                return;
+            }
+
+            if (timeSinceLastFrame > FrameTimeoutMs)
+            {
+                NotifyDisconnected();
+
+                // ✅ Only restart if we haven't exceeded max attempts and cooldown passed
+                if (restartAttempts < MaxRestartAttempts && timeSinceLastRestart > RestartCooldownMs)
+                {
+                    lastRestartAttempt = DateTime.Now;
+                    restartAttempts++;
+                    RestartFrameReader();
+                }
+                // If max attempts reached, just keep showing disconnected
+            }
+            else if (firstFrameReceived)
+            {
+                NotifyConnected();
+            }
+        }
+
+        private void RestartFrameReader()
+        {
+            try
+            {
+                // ✅ First check if sensor is still available
+                if (kinectSensor == null || !kinectSensor.IsOpen || !kinectSensor.IsAvailable)
+                {
+                    NotifyDisconnected();
+                    return;
+                }
+
+                if (multiSourceFrameReader != null)
+                {
+                    multiSourceFrameReader.Dispose();
+                    multiSourceFrameReader = null;
+                }
+
+                multiSourceFrameReader = kinectSensor.OpenMultiSourceFrameReader(
+                    FrameSourceTypes.Depth | FrameSourceTypes.Body | FrameSourceTypes.Color);
+
+                multiSourceFrameReader.MultiSourceFrameArrived += (s, e) =>
+                {
+                    lastFrameReceived = DateTime.Now;
+                    restartAttempts = 0;
+
+                    if (!firstFrameReceived)
+                    {
+                        firstFrameReceived = true;
+                        isInitializing = false;
+                        NotifyConnected();
+                    }
+
+                    FrameArrived?.Invoke(s, e);
+                };
+
+                lastFrameReceived = DateTime.Now;
+            }
+            catch (Exception)
+            {
+                // Sensor not available - don't retry
+                NotifyDisconnected();
             }
         }
 
@@ -95,6 +208,13 @@ namespace kinectProject
 
         public void Shutdown()
         {
+            if (watchdogTimer != null)
+            {
+                watchdogTimer.Stop();
+                watchdogTimer.Dispose();
+                watchdogTimer = null;
+            }
+
             if (multiSourceFrameReader != null)
             {
                 multiSourceFrameReader.Dispose();
@@ -103,8 +223,8 @@ namespace kinectProject
 
             if (kinectSensor != null)
             {
-                kinectSensor.IsAvailableChanged -= KinectSensor_IsAvailableChanged;
-                kinectSensor.Close();
+                if (kinectSensor.IsOpen)
+                    kinectSensor.Close();
                 kinectSensor = null;
             }
         }
