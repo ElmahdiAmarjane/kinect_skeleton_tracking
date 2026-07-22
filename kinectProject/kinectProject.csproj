@@ -117,6 +117,7 @@
     <Reference Include="WindowsBase" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="Services\ImageCaptureService.cs" />
     <Compile Include="UI\Dialogs\FoReferenceInputDialog.cs">
       <SubType>Form</SubType>
     </Compile>
@@ -169,6 +170,9 @@
       <SubType>Form</SubType>
     </Compile>
     <Compile Include="UI\Dialogs\DetectionSettingsDialog.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="UI\Dialogs\MultiImagePreviewDialog.cs">
       <SubType>Form</SubType>
     </Compile>
     <Compile Include="UI\Dialogs\PdfInputForm.cs">

@@ -38,6 +38,7 @@ namespace kinectProject
         private PictureBox angleSpineBox;
         private PictureBox realAngleCobb;
 
+        private ImageCaptureService imageCaptureService;
         #endregion
 
         #region State Variables
@@ -83,6 +84,8 @@ namespace kinectProject
                 colorService = new ColorProcessingService(kinectService.CoordinateMapper);
                 spineService = new SpineCurveService(kinectService.CoordinateMapper);
                 pdfReportService = new PdfReportService();
+
+                imageCaptureService = new ImageCaptureService(depthService, colorService);
 
                 kinectService.FrameArrived += KinectService_FrameArrived;
 
@@ -229,102 +232,272 @@ namespace kinectProject
             };
             infoBox.Controls.Add(realAngleCobb);
         }
-
         private void SetupTopPanel()
         {
             Panel topPanel = new Panel
             {
                 Dock = DockStyle.Top,
-                Height = 80,
-                BackColor = Color.FromArgb(30, 30, 45),
-                Padding = new Padding(8, 12, 8, 8)
+                Height = 55,
+                BackColor = Color.FromArgb(32, 32, 42),
+                Padding = new Padding(6, 8, 6, 8)
             };
             this.Controls.Add(topPanel);
 
-            FlowLayoutPanel buttonPanel = new FlowLayoutPanel
+            FlowLayoutPanel toolbar = new FlowLayoutPanel
             {
                 Dock = DockStyle.Fill,
                 FlowDirection = FlowDirection.LeftToRight,
-                WrapContents = true,
-                BackColor = Color.Transparent,
-                AutoSize = true,
-                Padding = new Padding(0, 5, 0, 0)
+                WrapContents = false,
+                BackColor = Color.Transparent
             };
-            topPanel.Controls.Add(buttonPanel);
+            topPanel.Controls.Add(toolbar);
 
-            // Color scheme
-            Color primaryColor = Color.FromArgb(65, 105, 225);
-            Color secondaryColor = Color.FromArgb(50, 205, 50);
+            // Colors
+            Color primaryColor = Color.FromArgb(0, 122, 204);
+            Color secondaryColor = Color.FromArgb(40, 167, 69);
             Color accentColor = Color.FromArgb(255, 140, 0);
             Color exportColor = Color.FromArgb(138, 43, 226);
             Color pdfColor = Color.FromArgb(220, 20, 60);
             Color analyzerColor = Color.FromArgb(30, 144, 255);
+            Color captureColor = Color.FromArgb(0, 150, 136);
 
-            // Create buttons
-            Button btnOpenBodyAnalyzer = RoundedButtonHelper.CreateStyledButton(
-                "📷 Analyser Image", analyzerColor, BtnOpenBodyAnalyzer_Click);
-            Button generatePdfButton = RoundedButtonHelper.CreateStyledButton(
-                "📄 Générer PDF", pdfColor, GeneratePdfButton_Click);
-            Button btnSaveDepthImage = RoundedButtonHelper.CreateStyledButton(
-                "💾 Depth Image", primaryColor, BtnSaveDepthImage_Click);
-            Button btnSaveImage = RoundedButtonHelper.CreateStyledButton(
-                "💾 Color Image", primaryColor, BtnSaveImage_Click);
-            Button sagittalBtn = RoundedButtonHelper.CreateStyledButton(
-                "📊 Capturer Courbe", secondaryColor, SagittalBtn_Click);
-            Button exportBtn = RoundedButtonHelper.CreateStyledButton(
-                "🖼️ Export PNG", accentColor, ExportCurveBtn_Click);
-            Button btnExportData = RoundedButtonHelper.CreateStyledButton(
-                "📁 Export Data", exportColor, BtnExportData_Click);
-            Button btnImportData = RoundedButtonHelper.CreateStyledButton(
-                "📂 Import Data", exportColor, BtnImportData_Click);
-            Button btnNormalImage = RoundedButtonHelper.CreateStyledButton(
-                "🖼️ Normal Image", exportColor, BtnNormalImage_Click);
-            Button toggleInfoBtn = RoundedButtonHelper.CreateStyledButton(
-                "👁️ Afficher Info", Color.Gray, (s, args) =>
-                {
-                    infoBox.Visible = !infoBox.Visible;
-                    infoBox.Parent.PerformLayout();
-                    sideBox.Refresh();
-                });
-
-            // Separator helper
+            // Separator
             Label CreateSeparator() => new Label
             {
-                Text = "|",
-                ForeColor = Color.FromArgb(100, 100, 120),
+                Text = "│",
+                ForeColor = Color.FromArgb(70, 70, 85),
                 AutoSize = true,
-                Margin = new Padding(5, 5, 5, 5),
-                Font = new Font("Segoe UI", 11, FontStyle.Bold)
+                Margin = new Padding(6, 2, 6, 2),
+                Font = new Font("Segoe UI", 11, FontStyle.Regular)
             };
 
-            // Add buttons in groups
-            buttonPanel.Controls.Add(btnOpenBodyAnalyzer);
-            buttonPanel.Controls.Add(CreateSeparator());
-            buttonPanel.Controls.Add(btnSaveDepthImage);
-            buttonPanel.Controls.Add(btnSaveImage);
-            buttonPanel.Controls.Add(CreateSeparator());
-            buttonPanel.Controls.Add(sagittalBtn);
-            buttonPanel.Controls.Add(exportBtn);
-            buttonPanel.Controls.Add(btnExportData);
-            buttonPanel.Controls.Add(btnImportData);
-            buttonPanel.Controls.Add(CreateSeparator());
-            buttonPanel.Controls.Add(toggleInfoBtn);
-            buttonPanel.Controls.Add(generatePdfButton);
-            buttonPanel.Controls.Add(btnNormalImage);
+            // All buttons in one row - auto-sized
+            Button btnOpenBodyAnalyzer = CreateStyledButton("📷 Analyser Image", analyzerColor, BtnOpenBodyAnalyzer_Click);
+            Button btnSaveDepthImage = CreateStyledButton("💾 Depth", primaryColor, BtnSaveDepthImage_Click);
+            Button btnSaveImage = CreateStyledButton("💾 Color", primaryColor, BtnSaveImage_Click);
+            Button btnNormalImage = CreateStyledButton("🖼️ Normal", exportColor, BtnNormalImage_Click);
+            Button btnCaptureAll = CreateStyledButton("📸 Capture All", captureColor, BtnCaptureAll_Click);
+            Button sagittalBtn = CreateStyledButton("📊 Courbe", secondaryColor, SagittalBtn_Click);
+            Button exportBtn = CreateStyledButton("🖼️ Export PNG", accentColor, ExportCurveBtn_Click);
+            Button btnExportData = CreateStyledButton("📁 Export", exportColor, BtnExportData_Click);
+            Button btnImportData = CreateStyledButton("📂 Import", exportColor, BtnImportData_Click);
+            Button generatePdfButton = CreateStyledButton("📄 PDF", pdfColor, GeneratePdfButton_Click);
+            Button toggleInfoBtn = CreateStyledButton("Data 👁️", Color.FromArgb(100, 100, 110), (s, args) =>
+            {
+                infoBox.Visible = !infoBox.Visible;
+                infoBox.Parent.PerformLayout();
+                sideBox.Refresh();
+            });
+
+            toolbar.Controls.Add(btnOpenBodyAnalyzer);
+            toolbar.Controls.Add(CreateSeparator());
+            toolbar.Controls.Add(btnSaveDepthImage);
+            toolbar.Controls.Add(btnSaveImage);
+            toolbar.Controls.Add(CreateSeparator());
+            toolbar.Controls.Add(btnNormalImage);
+            toolbar.Controls.Add(btnCaptureAll);
+            toolbar.Controls.Add(CreateSeparator());
+            toolbar.Controls.Add(sagittalBtn);
+            toolbar.Controls.Add(exportBtn);
+            toolbar.Controls.Add(CreateSeparator());
+            toolbar.Controls.Add(btnExportData);
+            toolbar.Controls.Add(btnImportData);
+            toolbar.Controls.Add(CreateSeparator());
+            toolbar.Controls.Add(generatePdfButton);
+            toolbar.Controls.Add(CreateSeparator());
+            toolbar.Controls.Add(toggleInfoBtn);
 
             // Tooltips
             ToolTip toolTip = new ToolTip();
-            toolTip.SetToolTip(btnSaveDepthImage, "Sauvegarder l'image de profondeur");
-            toolTip.SetToolTip(btnSaveImage, "Sauvegarder l'image couleur");
-            toolTip.SetToolTip(btnExportData, "Exporter les données de courbe (JSON/CSV)");
-            toolTip.SetToolTip(exportBtn, "Exporter la courbe en image PNG");
-            toolTip.SetToolTip(sagittalBtn, "Capturer la courbe sagittale du dos");
             toolTip.SetToolTip(btnOpenBodyAnalyzer, "Ouvrir l'analyseur d'image corporelle");
+            toolTip.SetToolTip(btnSaveDepthImage, "Sauvegarder l'image de profondeur");
+            toolTip.SetToolTip(btnSaveImage, "Sauvegarder l'image couleur alignée");
+            toolTip.SetToolTip(btnNormalImage, "Sauvegarder l'image couleur normale (1920x1080)");
+            toolTip.SetToolTip(btnCaptureAll, "Capturer et sauvegarder toutes les images");
+            toolTip.SetToolTip(sagittalBtn, "Capturer la courbe sagittale du dos");
+            toolTip.SetToolTip(exportBtn, "Exporter la courbe en image PNG");
+            toolTip.SetToolTip(btnExportData, "Exporter données (JSON/CSV)");
+            toolTip.SetToolTip(btnImportData, "Importer données sauvegardées");
             toolTip.SetToolTip(generatePdfButton, "Générer un rapport PDF complet");
-            toolTip.SetToolTip(toggleInfoBtn, "Afficher/Masquer les informations");
-            toolTip.SetToolTip(btnImportData, "Importer des données de courbe sauvegardées");
-            toolTip.SetToolTip(btnNormalImage, "Sauvegarder l'image couleur normale");
+            toolTip.SetToolTip(toggleInfoBtn, "Afficher/Masquer le panneau info");
         }
+
+        /// <summary>
+        /// Creates a modern auto-sized button with rounded corners
+        /// </summary>
+        private Button CreateStyledButton(string text, Color backColor, EventHandler clickHandler)
+        {
+            Button button = new Button
+            {
+                Text = text,
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                MinimumSize = new Size(55, 32),
+                BackColor = backColor,
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat,
+                Font = new Font("Segoe UI", 8.5f, FontStyle.Regular),
+                TextAlign = ContentAlignment.MiddleCenter,
+                Margin = new Padding(2),
+                Padding = new Padding(8, 4, 8, 4),
+                Cursor = Cursors.Hand,
+                UseVisualStyleBackColor = false
+            };
+
+            button.FlatAppearance.BorderSize = 0;
+            button.FlatAppearance.MouseOverBackColor = ControlPaint.Light(backColor, 0.2f);
+            button.FlatAppearance.MouseDownBackColor = ControlPaint.Dark(backColor, 0.15f);
+
+            // Rounded corners
+            button.Paint += (s, e) =>
+            {
+                Rectangle rect = button.ClientRectangle;
+                rect.Width -= 1;
+                rect.Height -= 1;
+                using (System.Drawing.Drawing2D.GraphicsPath path = new System.Drawing.Drawing2D.GraphicsPath())
+                {
+                    int r = 6;
+                    path.AddArc(rect.X, rect.Y, r, r, 180, 90);
+                    path.AddArc(rect.Right - r, rect.Y, r, r, 270, 90);
+                    path.AddArc(rect.Right - r, rect.Bottom - r, r, r, 0, 90);
+                    path.AddArc(rect.X, rect.Bottom - r, r, r, 90, 90);
+                    path.CloseAllFigures();
+                    button.Region = new Region(path);
+                }
+            };
+
+            button.Click += clickHandler;
+            return button;
+        }
+        /// <summary>
+        /// Creates a grouped panel with a title label
+        /// </summary>
+        private Panel CreateToolbarGroup(string title, Color backColor)
+        {
+            Panel group = new Panel
+            {
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                BackColor = backColor,
+                Margin = new Padding(2, 4, 2, 4),
+                Padding = new Padding(4, 4, 4, 4),
+                MinimumSize = new Size(0, 70)
+            };
+
+            // Rounded corners for the group
+            group.Paint += (s, e) =>
+            {
+                ControlPaint.DrawBorder(e.Graphics, group.ClientRectangle,
+                    Color.FromArgb(80, 80, 95), 1, ButtonBorderStyle.Solid,
+                    Color.FromArgb(80, 80, 95), 1, ButtonBorderStyle.Solid,
+                    Color.FromArgb(80, 80, 95), 1, ButtonBorderStyle.Solid,
+                    Color.FromArgb(80, 80, 95), 1, ButtonBorderStyle.Solid);
+            };
+
+            // Title label
+            Label lblTitle = new Label
+            {
+                Text = title,
+                ForeColor = Color.FromArgb(180, 180, 195),
+                Font = new Font("Segoe UI", 7.5f, FontStyle.Regular),
+                AutoSize = true,
+                Location = new Point(6, 1)
+            };
+            group.Controls.Add(lblTitle);
+
+            // Flow layout for buttons inside the group
+            FlowLayoutPanel buttonFlow = new FlowLayoutPanel
+            {
+                FlowDirection = FlowDirection.LeftToRight,
+                WrapContents = false,
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                Location = new Point(2, 16),
+                BackColor = Color.Transparent
+            };
+            group.Controls.Add(buttonFlow);
+
+            // Store reference to buttonFlow in Tag for later use
+            group.Tag = buttonFlow;
+
+            // Override Controls.Add to redirect buttons to the flow panel
+            group.ControlAdded += (s, e) =>
+            {
+                if (e.Control is Button && e.Control != null && group.Tag is FlowLayoutPanel flow)
+                {
+                    if (!flow.Controls.Contains(e.Control))
+                    {
+                        group.Controls.Remove(e.Control);
+                        flow.Controls.Add(e.Control);
+                    }
+                }
+            };
+
+            return group;
+        }
+
+        /// <summary>
+        /// Creates a modern toolbar button with icon and text
+        /// </summary>
+        private Button CreateToolbarButton(string text, string icon, string tooltip, bool isPrimary = false, bool analyzerColor = false)
+        {
+            Color btnColor;
+            if (analyzerColor)
+                btnColor = Color.FromArgb(30, 144, 255);
+            else if (isPrimary)
+                btnColor = Color.FromArgb(0, 150, 136);
+            else
+                btnColor = Color.FromArgb(55, 55, 68);
+
+            Button button = new Button
+            {
+                Text = $" {icon} {text}",
+                Size = new Size(90, 42),
+                BackColor = btnColor,
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat,
+                Font = new Font("Segoe UI", 8.5f, FontStyle.Regular),
+                TextAlign = ContentAlignment.MiddleCenter,
+                TextImageRelation = TextImageRelation.ImageBeforeText,
+                Margin = new Padding(2),
+                Padding = new Padding(4, 2, 4, 2),
+                Cursor = Cursors.Hand
+            };
+
+            button.FlatAppearance.BorderSize = 0;
+            button.FlatAppearance.MouseOverBackColor = ControlPaint.Light(btnColor, 0.15f);
+            button.FlatAppearance.MouseDownBackColor = ControlPaint.Dark(btnColor, 0.1f);
+
+            // Rounded corners
+            button.Paint += (s, e) =>
+            {
+                Rectangle rect = button.ClientRectangle;
+                rect.Width -= 1;
+                rect.Height -= 1;
+                using (System.Drawing.Drawing2D.GraphicsPath path = new System.Drawing.Drawing2D.GraphicsPath())
+                {
+                    int r = 6;
+                    path.AddArc(rect.X, rect.Y, r, r, 180, 90);
+                    path.AddArc(rect.Right - r, rect.Y, r, r, 270, 90);
+                    path.AddArc(rect.Right - r, rect.Bottom - r, r, r, 0, 90);
+                    path.AddArc(rect.X, rect.Bottom - r, r, r, 90, 90);
+                    path.CloseAllFigures();
+                    button.Region = new Region(path);
+                }
+            };
+
+            // Tooltip
+            if (!string.IsNullOrEmpty(tooltip))
+            {
+                ToolTip tip = new ToolTip();
+                tip.SetToolTip(button, tooltip);
+            }
+
+            return button;
+        }
+
+        #endregion
+
         private void SetupStatusStrip()
         {
             StatusStrip statusStrip = new StatusStrip
@@ -385,7 +558,7 @@ namespace kinectProject
             this.ContextMenuStrip = curveMenu;
         }
 
-        #endregion
+   
 
         #region Kinect Frame Processing
 
@@ -627,17 +800,20 @@ namespace kinectProject
         {
             try
             {
-                var colorBitmap = colorService.ColorBitmap;
-                if (colorBitmap == null)
+                // Get the full color bitmap (1920x1080)
+                var fullColorImage = colorService.FullColorBitmap;
+
+                if (fullColorImage == null)
                 {
-                    MessageBox.Show("No color image available.", "Info",
-                        MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    MessageBox.Show("No color image available. Make sure the Kinect is connected.",
+                        "Info", MessageBoxButtons.OK, MessageBoxIcon.Information);
                     return;
                 }
 
                 using (var previewForm = new PreviewForm())
                 {
-                    previewForm.PreviewImage = colorBitmap;
+                    previewForm.PreviewImage = fullColorImage;
+
                     if (previewForm.ShowDialog() == DialogResult.OK)
                     {
                         using (SaveFileDialog sfd = new SaveFileDialog())
@@ -648,13 +824,15 @@ namespace kinectProject
 
                             if (sfd.ShowDialog() == DialogResult.OK)
                             {
-                                colorBitmap.Save(sfd.FileName);
+                                fullColorImage.Save(sfd.FileName);
                                 MessageBox.Show($"Image saved: {sfd.FileName}", "Success",
                                     MessageBoxButtons.OK, MessageBoxIcon.Information);
                             }
                         }
                     }
                 }
+
+                fullColorImage?.Dispose();
             }
             catch (Exception ex)
             {
@@ -662,8 +840,43 @@ namespace kinectProject
                     MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
-
         #endregion
+
+        private void BtnCaptureAll_Click(object sender, EventArgs e)
+        {
+            try
+            {
+                // Get current images from services
+                var (depthImage, colorAligned, normalImage) = imageCaptureService.CaptureAllImages();
+
+                if (depthImage == null && normalImage == null)
+                {
+                    MessageBox.Show("No images available. Make sure the Kinect is connected.",
+                        "Info", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
+
+                // Get the aligned color image from the PictureBox
+                Image alignedImage = null;
+                if (normalPictureBox.Image != null)
+                {
+                    alignedImage = new Bitmap(normalPictureBox.Image);
+                }
+
+                // Show preview and save
+                imageCaptureService.ShowPreviewAndSave(depthImage, alignedImage, normalImage);
+
+                // Cleanup
+                depthImage?.Dispose();
+                alignedImage?.Dispose();
+                normalImage?.Dispose();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Error capturing images: {ex.Message}", "Error",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
 
         #region SideBox Mouse Events
 

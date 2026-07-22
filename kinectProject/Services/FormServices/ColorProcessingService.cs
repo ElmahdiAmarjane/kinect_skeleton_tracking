@@ -13,6 +13,9 @@ namespace kinectProject
         private byte[] colorPixels;
         private CoordinateMapper coordinateMapper;
 
+        private Bitmap fullColorBitmap;
+        private readonly object colorLock = new object();
+
         public Bitmap ColorBitmap => colorBitmap;
 
         public ColorProcessingService(CoordinateMapper mapper)
@@ -20,6 +23,19 @@ namespace kinectProject
             coordinateMapper = mapper;
             colorBitmap = new Bitmap(1920, 1080, PixelFormat.Format32bppArgb);
             colorPixels = new byte[1920 * 1080 * 4];
+            fullColorBitmap = new Bitmap(1920, 1080, PixelFormat.Format32bppArgb);
+        }
+
+        public Bitmap FullColorBitmap
+        {
+            get
+            {
+                lock (colorLock)
+                {
+                    if (fullColorBitmap == null) return null;
+                    return new Bitmap(fullColorBitmap);
+                }
+            }
         }
 
         public Bitmap GenerateAlignedColorImage(DepthFrame depthFrame, ColorFrame colorFrame)
@@ -36,6 +52,17 @@ namespace kinectProject
 
             byte[] colorData = new byte[colorWidth * colorHeight * 4];
             colorFrame.CopyConvertedFrameDataToArray(colorData, ColorImageFormat.Bgra);
+
+            lock (colorLock)
+            {
+                BitmapData fullBmpData = fullColorBitmap.LockBits(
+                    new Rectangle(0, 0, colorWidth, colorHeight),
+                    ImageLockMode.WriteOnly,
+                    PixelFormat.Format32bppArgb);
+                Marshal.Copy(colorData, 0, fullBmpData.Scan0, colorData.Length);
+                fullColorBitmap.UnlockBits(fullBmpData);
+            }
+
 
             Bitmap alignedBitmap = new Bitmap(depthWidth, depthHeight, PixelFormat.Format32bppArgb);
             BitmapData bmpData = alignedBitmap.LockBits(
