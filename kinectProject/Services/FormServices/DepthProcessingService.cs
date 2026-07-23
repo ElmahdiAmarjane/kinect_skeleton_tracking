@@ -12,7 +12,7 @@ namespace kinectProject
     public class DepthProcessingService
     {
         private const ushort BODY_DETECTION_MIN_DEPTH = 500;
-        private const ushort BODY_DETECTION_MAX_DEPTH = 2000;
+        private const ushort BODY_DETECTION_MAX_DEPTH = 3000;
         private const int DEPTH_WINDOW = 200;
 
         private byte[] depthPixels;
@@ -44,8 +44,11 @@ namespace kinectProject
 
             if (trackedBody == null) return;
 
+            // ✅ THIS IS THE KEY: reference depth from the body in REAL TIME
             CameraSpacePoint spineBase = trackedBody.Joints[JointType.SpineMid].Position;
             ushort referenceDepth = (ushort)(spineBase.Z * 1000);
+
+            // ✅ Window stays TIGHT (200) but CENTERED on the person
             ushort minDepth = (ushort)Math.Max(referenceDepth - DEPTH_WINDOW, BODY_DETECTION_MIN_DEPTH);
             ushort maxDepth = (ushort)Math.Min(referenceDepth + DEPTH_WINDOW, BODY_DETECTION_MAX_DEPTH);
 
@@ -58,6 +61,7 @@ namespace kinectProject
                     return;
                 }
 
+                // ✅ Same precision: color spread over only 400mm!
                 double normalizedDepth = (depth - minDepth) / (double)(maxDepth - minDepth);
                 normalizedDepth = Math.Max(0.0, Math.Min(1.0, normalizedDepth));
                 Color color = HsvToRgb(normalizedDepth * 360.0, 1.0, 1.0);

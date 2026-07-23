@@ -38,7 +38,7 @@ namespace kinectProject
             }
         }
 
-        public Bitmap GenerateAlignedColorImage(DepthFrame depthFrame, ColorFrame colorFrame)
+        public Bitmap GenerateAlignedColorImage(DepthFrame depthFrame, ColorFrame colorFrame, ushort referenceDepth = 1500)
         {
             if (depthFrame == null || colorFrame == null) return null;
 
@@ -85,7 +85,11 @@ namespace kinectProject
 
                     byte b = 128, g = 128, r = 128, a = 255;
 
-                    if (depthValue > 0 && depthValue >= 500 && depthValue <= 2000)
+                    // ✅ Use body-centered window instead of hardcoded range
+                    ushort minDepth = (ushort)Math.Max(referenceDepth - 200, 500);
+                    ushort maxDepth = (ushort)Math.Min(referenceDepth + 200, 3000);
+
+                    if (depthValue > 0 && depthValue >= minDepth && depthValue <= maxDepth)
                     {
                         int colorX = (int)(colorPoint.X + 0.5);
                         int colorY = (int)(colorPoint.Y + 0.5);

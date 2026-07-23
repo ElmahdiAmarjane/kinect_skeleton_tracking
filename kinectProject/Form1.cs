@@ -369,134 +369,6 @@ namespace kinectProject
             button.Click += clickHandler;
             return button;
         }
-        /// <summary>
-        /// Creates a grouped panel with a title label
-        /// </summary>
-        private Panel CreateToolbarGroup(string title, Color backColor)
-        {
-            Panel group = new Panel
-            {
-                AutoSize = true,
-                AutoSizeMode = AutoSizeMode.GrowAndShrink,
-                BackColor = backColor,
-                Margin = new Padding(2, 4, 2, 4),
-                Padding = new Padding(4, 4, 4, 4),
-                MinimumSize = new Size(0, 70)
-            };
-
-            // Rounded corners for the group
-            group.Paint += (s, e) =>
-            {
-                ControlPaint.DrawBorder(e.Graphics, group.ClientRectangle,
-                    Color.FromArgb(80, 80, 95), 1, ButtonBorderStyle.Solid,
-                    Color.FromArgb(80, 80, 95), 1, ButtonBorderStyle.Solid,
-                    Color.FromArgb(80, 80, 95), 1, ButtonBorderStyle.Solid,
-                    Color.FromArgb(80, 80, 95), 1, ButtonBorderStyle.Solid);
-            };
-
-            // Title label
-            Label lblTitle = new Label
-            {
-                Text = title,
-                ForeColor = Color.FromArgb(180, 180, 195),
-                Font = new Font("Segoe UI", 7.5f, FontStyle.Regular),
-                AutoSize = true,
-                Location = new Point(6, 1)
-            };
-            group.Controls.Add(lblTitle);
-
-            // Flow layout for buttons inside the group
-            FlowLayoutPanel buttonFlow = new FlowLayoutPanel
-            {
-                FlowDirection = FlowDirection.LeftToRight,
-                WrapContents = false,
-                AutoSize = true,
-                AutoSizeMode = AutoSizeMode.GrowAndShrink,
-                Location = new Point(2, 16),
-                BackColor = Color.Transparent
-            };
-            group.Controls.Add(buttonFlow);
-
-            // Store reference to buttonFlow in Tag for later use
-            group.Tag = buttonFlow;
-
-            // Override Controls.Add to redirect buttons to the flow panel
-            group.ControlAdded += (s, e) =>
-            {
-                if (e.Control is Button && e.Control != null && group.Tag is FlowLayoutPanel flow)
-                {
-                    if (!flow.Controls.Contains(e.Control))
-                    {
-                        group.Controls.Remove(e.Control);
-                        flow.Controls.Add(e.Control);
-                    }
-                }
-            };
-
-            return group;
-        }
-
-        /// <summary>
-        /// Creates a modern toolbar button with icon and text
-        /// </summary>
-        private Button CreateToolbarButton(string text, string icon, string tooltip, bool isPrimary = false, bool analyzerColor = false)
-        {
-            Color btnColor;
-            if (analyzerColor)
-                btnColor = Color.FromArgb(30, 144, 255);
-            else if (isPrimary)
-                btnColor = Color.FromArgb(0, 150, 136);
-            else
-                btnColor = Color.FromArgb(55, 55, 68);
-
-            Button button = new Button
-            {
-                Text = $" {icon} {text}",
-                Size = new Size(90, 42),
-                BackColor = btnColor,
-                ForeColor = Color.White,
-                FlatStyle = FlatStyle.Flat,
-                Font = new Font("Segoe UI", 8.5f, FontStyle.Regular),
-                TextAlign = ContentAlignment.MiddleCenter,
-                TextImageRelation = TextImageRelation.ImageBeforeText,
-                Margin = new Padding(2),
-                Padding = new Padding(4, 2, 4, 2),
-                Cursor = Cursors.Hand
-            };
-
-            button.FlatAppearance.BorderSize = 0;
-            button.FlatAppearance.MouseOverBackColor = ControlPaint.Light(btnColor, 0.15f);
-            button.FlatAppearance.MouseDownBackColor = ControlPaint.Dark(btnColor, 0.1f);
-
-            // Rounded corners
-            button.Paint += (s, e) =>
-            {
-                Rectangle rect = button.ClientRectangle;
-                rect.Width -= 1;
-                rect.Height -= 1;
-                using (System.Drawing.Drawing2D.GraphicsPath path = new System.Drawing.Drawing2D.GraphicsPath())
-                {
-                    int r = 6;
-                    path.AddArc(rect.X, rect.Y, r, r, 180, 90);
-                    path.AddArc(rect.Right - r, rect.Y, r, r, 270, 90);
-                    path.AddArc(rect.Right - r, rect.Bottom - r, r, r, 0, 90);
-                    path.AddArc(rect.X, rect.Bottom - r, r, r, 90, 90);
-                    path.CloseAllFigures();
-                    button.Region = new Region(path);
-                }
-            };
-
-            // Tooltip
-            if (!string.IsNullOrEmpty(tooltip))
-            {
-                ToolTip tip = new ToolTip();
-                tip.SetToolTip(button, tooltip);
-            }
-
-            return button;
-        }
-
-        #endregion
 
         private void SetupStatusStrip()
         {
@@ -558,11 +430,11 @@ namespace kinectProject
             this.ContextMenuStrip = curveMenu;
         }
 
-   
+
 
         #region Kinect Frame Processing
 
-        // In Form1.cs, replace the KinectService_FrameArrived method:
+
 
         private void KinectService_FrameArrived(object sender, MultiSourceFrameArrivedEventArgs e)
         {
@@ -574,15 +446,23 @@ namespace kinectProject
             var multiSourceFrame = e.FrameReference.AcquireFrame();
             if (multiSourceFrame == null) return;
 
+            // Default reference depth (1.5m)
+            ushort referenceDepth = 1500;
+            Body trackedBody = null;
+
             // Process depth + body
             using (var depthFrame = multiSourceFrame.DepthFrameReference.AcquireFrame())
             using (var bodyFrame = multiSourceFrame.BodyFrameReference.AcquireFrame())
             {
                 if (depthFrame != null && bodyFrame != null)
                 {
-                    Body trackedBody = depthService.GetTrackedBody(bodyFrame);
+                    trackedBody = depthService.GetTrackedBody(bodyFrame);
+
                     if (trackedBody != null)
                     {
+                        // Get reference depth from the spine
+                        referenceDepth = (ushort)(trackedBody.Joints[JointType.SpineMid].Position.Z * 1000);
+
                         depthService.ProcessDepthFrameWithBodyContext(depthFrame, trackedBody);
                         spineService.DrawSpineOnBitmap(trackedBody, depthService.DepthBitmap);
                         spineAngle = spineService.CalculateSpineAngle(trackedBody);
@@ -601,13 +481,19 @@ namespace kinectProject
             {
                 if (colorFrame != null && depthFrame != null)
                 {
-                    var aligned = colorService.GenerateAlignedColorImage(depthFrame, colorFrame);
+                    // Pass the reference depth to the color alignment
+                    var aligned = colorService.GenerateAlignedColorImage(
+                        depthFrame,
+                        colorFrame,
+                        referenceDepth);
+
                     if (aligned != null)
                     {
                         this.BeginInvoke((Action)(() =>
                         {
                             var oldImage = normalPictureBox.Image;
                             normalPictureBox.Image = aligned;
+
                             if (oldImage != null && oldImage != aligned)
                             {
                                 oldImage.Dispose();
@@ -626,17 +512,14 @@ namespace kinectProject
                 {
                     var oldImage = depthPictureBox.Image;
                     depthPictureBox.Image = safeDepth;
+
                     if (oldImage != null)
                     {
                         oldImage.Dispose();
                     }
                 }));
             }
-
-            // ✅ Just set to null - no Dispose needed
-            // multiSourceFrame = null;
         }
-
         #endregion
 
         #region Button Click Handlers
@@ -1214,3 +1097,5 @@ namespace kinectProject
         #endregion
     }
 }
+
+#endregion

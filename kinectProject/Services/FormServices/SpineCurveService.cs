@@ -12,7 +12,7 @@ namespace kinectProject
     public class SpineCurveService
     {
         private const ushort BODY_DETECTION_MIN_DEPTH = 500;
-        private const ushort BODY_DETECTION_MAX_DEPTH = 2000;
+        private const ushort BODY_DETECTION_MAX_DEPTH = 3000;
         private CoordinateMapper coordinateMapper;
 
         public int MaxZIndex { get; private set; } = -1;
@@ -51,17 +51,28 @@ namespace kinectProject
                 return;
             }
 
+            // ✅ Use the tracked body's distance as the reference depth
+            ushort referenceDepth = (ushort)(trackedBody.Joints[JointType.SpineMid].Position.Z * 1000);
+
+            // Keep only pixels within ±20 cm of the body
+            ushort minDepth = (ushort)Math.Max(referenceDepth - 200, 500);
+            ushort maxDepth = (ushort)Math.Min(referenceDepth + 200, 3000);
+
             for (int y = startY; y <= endY; y++)
             {
                 List<float> zSamples = new List<float>();
+
                 for (int dx = -2; dx <= 2; dx++)
                 {
                     int x = centerX + dx;
-                    if (x < 0 || x >= width) continue;
+                    if (x < 0 || x >= width)
+                        continue;
 
                     int index = y * width + x;
                     ushort depth = depthData[index];
-                    if (depth == 0 || depth < BODY_DETECTION_MIN_DEPTH || depth > BODY_DETECTION_MAX_DEPTH)
+
+                    // ✅ Adaptive depth filtering
+                    if (depth == 0 || depth < minDepth || depth > maxDepth)
                         continue;
 
                     CameraSpacePoint cp = coordinateMapper.MapDepthPointToCameraSpace(
@@ -73,7 +84,8 @@ namespace kinectProject
                 if (zSamples.Count >= 3)
                 {
                     float medianZ = zSamples.OrderBy(z => z).ElementAt(zSamples.Count / 2);
-                    rawPoints.Add(new  System.Drawing.PointF(medianZ, y));
+
+                    rawPoints.Add(new System.Drawing.PointF(medianZ, y));
 
                     if (medianZ > maxZ)
                     {
@@ -107,6 +119,7 @@ namespace kinectProject
                         float y1 = smoothedPoints[i - 1].Y;
                         float x2 = 50 + smoothedPoints[i].X * 0.1f;
                         float y2 = smoothedPoints[i].Y;
+
                         g.DrawLine(spinePen, x1, y1, x2, y2);
                     }
                 }
@@ -127,12 +140,19 @@ namespace kinectProject
                 float refX = 50 + deepestX * 0.1f;
                 FixedDeepestXPixel = refX;
 
-                using (Pen redPen = new Pen(Color.Red, 2) { DashStyle = System.Drawing.Drawing2D.DashStyle.Dash })
+                using (Pen redPen = new Pen(Color.Red, 2)
+                {
+                    DashStyle = System.Drawing.Drawing2D.DashStyle.Dash
+                })
                 {
                     g.DrawLine(redPen, refX, 0, refX, sideView.Height);
                 }
 
-                g.DrawString($"Deepest Z: {deepestZ:F0} mm", new Font("Arial", 9), Brushes.White, refX + 5, 10);
+                g.DrawString($"Deepest Z: {deepestZ:F0} mm",
+                    new Font("Arial", 9),
+                    Brushes.White,
+                    refX + 5,
+                    10);
             }
 
             sideBox.Image?.Dispose();
