@@ -63,6 +63,8 @@ namespace kinectProject
                 fullColorBitmap.UnlockBits(fullBmpData);
             }
 
+            ushort minDepth = (ushort)Math.Max(referenceDepth - 150, 500);
+            ushort maxDepth = (ushort)Math.Min(referenceDepth + 150, 3000);
 
             Bitmap alignedBitmap = new Bitmap(depthWidth, depthHeight, PixelFormat.Format32bppArgb);
             BitmapData bmpData = alignedBitmap.LockBits(
@@ -84,10 +86,6 @@ namespace kinectProject
                     int outputIndex = depthIndex * 4;
 
                     byte b = 128, g = 128, r = 128, a = 255;
-
-                    // ✅ Use body-centered window instead of hardcoded range
-                    ushort minDepth = (ushort)Math.Max(referenceDepth - 200, 500);
-                    ushort maxDepth = (ushort)Math.Min(referenceDepth + 200, 3000);
 
                     if (depthValue > 0 && depthValue >= minDepth && depthValue <= maxDepth)
                     {
@@ -114,7 +112,6 @@ namespace kinectProject
             Marshal.Copy(alignedPixels, 0, bmpData.Scan0, alignedPixels.Length);
             alignedBitmap.UnlockBits(bmpData);
 
-            // ✅ Return a clone to avoid cross-thread issues
             Bitmap result = new Bitmap(alignedBitmap);
             alignedBitmap.Dispose();
             return result;

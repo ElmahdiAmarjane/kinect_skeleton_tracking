@@ -39,6 +39,10 @@ namespace kinectProject
             CameraSpacePoint neckPos = trackedBody.Joints[JointType.Neck].Position;
             CameraSpacePoint basePos = trackedBody.Joints[JointType.SpineBase].Position;
 
+            ushort referenceDepth = (ushort)(trackedBody.Joints[JointType.SpineShoulder].Position.Z * 1000);
+            ushort minDepth = (ushort)Math.Max(referenceDepth - 150, 500);
+            ushort maxDepth = (ushort)Math.Min(referenceDepth + 150, 3000);
+
             DepthSpacePoint neckDepth = coordinateMapper.MapCameraPointToDepthSpace(neckPos);
             DepthSpacePoint baseDepth = coordinateMapper.MapCameraPointToDepthSpace(basePos);
 
@@ -51,12 +55,6 @@ namespace kinectProject
                 return;
             }
 
-            // ✅ Use the tracked body's distance as the reference depth
-            ushort referenceDepth = (ushort)(trackedBody.Joints[JointType.SpineMid].Position.Z * 1000);
-
-            // Keep only pixels within ±20 cm of the body
-            ushort minDepth = (ushort)Math.Max(referenceDepth - 200, 500);
-            ushort maxDepth = (ushort)Math.Min(referenceDepth + 200, 3000);
 
             for (int y = startY; y <= endY; y++)
             {

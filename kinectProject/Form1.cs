@@ -461,7 +461,7 @@ namespace kinectProject
                     if (trackedBody != null)
                     {
                         // Get reference depth from the spine
-                        referenceDepth = (ushort)(trackedBody.Joints[JointType.SpineMid].Position.Z * 1000);
+                        referenceDepth = (ushort)(trackedBody.Joints[JointType.SpineShoulder].Position.Z * 1000);
 
                         depthService.ProcessDepthFrameWithBodyContext(depthFrame, trackedBody);
                         spineService.DrawSpineOnBitmap(trackedBody, depthService.DepthBitmap);

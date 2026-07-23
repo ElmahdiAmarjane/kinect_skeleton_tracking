@@ -1,6 +1,5 @@
 ﻿using Microsoft.Kinect;
 using System;
-using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.Linq;
@@ -44,25 +43,34 @@ namespace kinectProject
 
             if (trackedBody == null) return;
 
-            // ✅ THIS IS THE KEY: reference depth from the body in REAL TIME
             CameraSpacePoint spineBase = trackedBody.Joints[JointType.SpineMid].Position;
             ushort referenceDepth = (ushort)(spineBase.Z * 1000);
-
-            // ✅ Window stays TIGHT (200) but CENTERED on the person
             ushort minDepth = (ushort)Math.Max(referenceDepth - DEPTH_WINDOW, BODY_DETECTION_MIN_DEPTH);
             ushort maxDepth = (ushort)Math.Min(referenceDepth + DEPTH_WINDOW, BODY_DETECTION_MAX_DEPTH);
+
+            double depthRange = maxDepth - minDepth;
 
             Parallel.For(0, depthData.Length, i =>
             {
                 ushort depth = depthData[i];
-                if (depth == 0 || depth < minDepth || depth > maxDepth)
+
+                // Outside the 3m range = black
+                if (depth == 0 || depth < BODY_DETECTION_MIN_DEPTH || depth > BODY_DETECTION_MAX_DEPTH)
                 {
                     SetPixelColor(i, 0, 0, 0);
                     return;
                 }
 
-                // ✅ Same precision: color spread over only 400mm!
-                double normalizedDepth = (depth - minDepth) / (double)(maxDepth - minDepth);
+                // Inside 3m range but outside body window = grayscale
+                if (depth < minDepth || depth > maxDepth)
+                {
+                    byte gray = (byte)(128 + (depth % 64)); // Subtle texture for context
+                    SetPixelColor(i, gray, gray, gray);
+                    return;
+                }
+
+                // Inside body window = FULL PRECISION COLOR (same as before!)
+                double normalizedDepth = (depth - minDepth) / depthRange;
                 normalizedDepth = Math.Max(0.0, Math.Min(1.0, normalizedDepth));
                 Color color = HsvToRgb(normalizedDepth * 360.0, 1.0, 1.0);
                 SetPixelColor(i, color.R, color.G, color.B);
@@ -120,7 +128,6 @@ namespace kinectProject
 
         private void UpdateBitmap(int width, int height)
         {
-            // ✅ Lock and update the existing bitmap instead of creating new one
             BitmapData bitmapData = depthBitmap.LockBits(
                 new Rectangle(0, 0, width, height),
                 ImageLockMode.WriteOnly,
@@ -130,7 +137,6 @@ namespace kinectProject
             depthBitmap.UnlockBits(bitmapData);
         }
 
-        // Add a method to get a safe copy
         public Bitmap GetSafeDepthBitmap()
         {
             if (depthBitmap == null) return null;
