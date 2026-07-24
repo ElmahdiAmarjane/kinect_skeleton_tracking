@@ -20,6 +20,13 @@ namespace kinectProject
         private SpineCurveService spineService;
         private PdfReportService pdfReportService;
 
+        private bool isFrozen = false;
+        private Bitmap frozenDepthImage;
+        private Bitmap frozenColorImage;
+        private SpineCurveData frozenCurveData;
+
+     
+
         #endregion
 
         #region Frame Rate Control
@@ -37,6 +44,9 @@ namespace kinectProject
         private PictureBox infoBox;
         private PictureBox angleSpineBox;
         private PictureBox realAngleCobb;
+
+        private Button btnFreeze;
+        private Button btnLive;
 
         private ImageCaptureService imageCaptureService;
         #endregion
@@ -288,6 +298,10 @@ namespace kinectProject
                 infoBox.Parent.PerformLayout();
                 sideBox.Refresh();
             });
+             btnFreeze = CreateStyledButton("🧊 Freeze", Color.FromArgb(255, 165, 0), BtnFreeze_Click);
+             btnLive = CreateStyledButton("▶ Live", Color.FromArgb(40, 167, 69), BtnLive_Click);
+            btnLive.Enabled = false; // Start disabled
+
 
             toolbar.Controls.Add(btnOpenBodyAnalyzer);
             toolbar.Controls.Add(CreateSeparator());
@@ -302,10 +316,13 @@ namespace kinectProject
             toolbar.Controls.Add(CreateSeparator());
             toolbar.Controls.Add(btnExportData);
             toolbar.Controls.Add(btnImportData);
-            toolbar.Controls.Add(CreateSeparator());
+            //toolbar.Controls.Add(CreateSeparator());
             toolbar.Controls.Add(generatePdfButton);
-            toolbar.Controls.Add(CreateSeparator());
+            //toolbar.Controls.Add(CreateSeparator());
             toolbar.Controls.Add(toggleInfoBtn);
+    
+            toolbar.Controls.Add(btnFreeze);
+            toolbar.Controls.Add(btnLive);
 
             // Tooltips
             ToolTip toolTip = new ToolTip();
@@ -438,6 +455,8 @@ namespace kinectProject
 
         private void KinectService_FrameArrived(object sender, MultiSourceFrameArrivedEventArgs e)
         {
+            if (isFrozen) return;
+
             if ((DateTime.Now - lastFrameTime).TotalMilliseconds < 1000 / TargetFrameRate)
                 return;
 
@@ -530,15 +549,54 @@ namespace kinectProject
             bodyAnalyzerForm.ShowDialog();
         }
 
+        private void BtnFreeze_Click(object sender, EventArgs e)
+        {
+            if (depthPictureBox.Image != null)
+            {
+                frozenDepthImage = new Bitmap(depthPictureBox.Image);
+                frozenColorImage = normalPictureBox.Image != null ? new Bitmap(normalPictureBox.Image) : null;
+
+                // Freeze curve data
+                if (spineService.LastSmoothedSpinePoints != null && spineService.LastSmoothedSpinePoints.Count > 0)
+                {
+                    frozenCurveData = new SpineCurveData
+                    {
+                        CaptureTime = DateTime.Now,
+                        Points = spineService.LastSmoothedSpinePoints.Select(p => PointFData.FromPointF(p)).ToList(),
+                        MaxZIndex = spineService.MaxZIndex,
+                        ManualZRef = spineService.ManualZRef,
+                        FixedDeepestXPixel = spineService.FixedDeepestXPixel,
+                        SpineAngle = spineAngle
+                    };
+                }
+
+                isFrozen = true;
+                UpdateStatusBar("Image gelée - Vous pouvez sauvegarder", Color.Cyan);
+                btnLive.Enabled = true;
+            }
+        }
+
+        private void BtnLive_Click(object sender, EventArgs e)
+        {
+            isFrozen = false;
+            frozenDepthImage?.Dispose();
+            frozenColorImage?.Dispose();
+            frozenCurveData = null;
+            UpdateStatusBar("Kinect connecté - En direct", Color.LightGreen);
+        }
+
+
         private void GeneratePdfButton_Click(object sender, EventArgs e)
         {
             using (PdfInputForm inputForm = new PdfInputForm())
             {
                 if (inputForm.ShowDialog() == DialogResult.OK)
                 {
-                    var depthImage = depthPictureBox?.Image;
-                    var colorImage = normalPictureBox?.Image;
-                    var splineImage = spineService.GenerateSpineCurveImageForPdf(500, 600);
+                    var depthImage = isFrozen ? frozenDepthImage : depthPictureBox?.Image;
+                    var colorImage = isFrozen ? frozenColorImage : normalPictureBox?.Image;
+                    var splineImage = isFrozen && frozenCurveData != null ?
+                        GenerateFrozenCurveImage() :
+                        spineService.GenerateSpineCurveImageForPdf(500, 600);
 
                     pdfReportService.GeneratePatientReport(
                         inputForm, depthImage, colorImage, splineImage,
@@ -599,12 +657,23 @@ namespace kinectProject
 
         private void BtnExportData_Click(object sender, EventArgs e)
         {
-            if (spineService.LastSmoothedSpinePoints == null || spineService.LastSmoothedSpinePoints.Count == 0)
+
+            var points = isFrozen && frozenCurveData != null ?
+      frozenCurveData.GetPointFList() :
+      spineService.LastSmoothedSpinePoints;
+
+            if (points == null || points.Count == 0)
             {
-                MessageBox.Show("Aucune donnée de courbe disponible pour l'export.", "Information",
-                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                MessageBox.Show("Aucune donnée disponible.", "Information", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
+
+            //if (spineService.LastSmoothedSpinePoints == null || spineService.LastSmoothedSpinePoints.Count == 0)
+            //{
+            //    MessageBox.Show("Aucune donnée de courbe disponible pour l'export.", "Information",
+            //        MessageBoxButtons.OK, MessageBoxIcon.Information);
+            //    return;
+            //}
 
             using (SaveFileDialog sfd = new SaveFileDialog())
             {
@@ -633,6 +702,22 @@ namespace kinectProject
             }
         }
 
+        private Bitmap GenerateFrozenCurveImage()
+        {
+            if (frozenCurveData == null) return null;
+
+            // Save current state
+            var savedData = spineService.SaveCurveData();
+
+            // Load frozen data
+            spineService.LoadCurveData(frozenCurveData);
+            var image = spineService.GenerateSpineCurveImageForPdf(500, 600);
+
+            // Restore previous state
+            spineService.LoadCurveData(savedData);
+
+            return image;
+        }
         private void BtnImportData_Click(object sender, EventArgs e)
         {
             using (OpenFileDialog ofd = new OpenFileDialog())
@@ -727,38 +812,21 @@ namespace kinectProject
 
         private void BtnCaptureAll_Click(object sender, EventArgs e)
         {
-            try
+            // ✅ Use frozen images if available
+            Image depthImg = isFrozen ? frozenDepthImage : depthPictureBox.Image;
+            Image colorImg = isFrozen ? frozenColorImage : normalPictureBox.Image;
+
+            if (depthImg == null)
             {
-                // Get current images from services
-                var (depthImage, colorAligned, normalImage) = imageCaptureService.CaptureAllImages();
-
-                if (depthImage == null && normalImage == null)
-                {
-                    MessageBox.Show("No images available. Make sure the Kinect is connected.",
-                        "Info", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                    return;
-                }
-
-                // Get the aligned color image from the PictureBox
-                Image alignedImage = null;
-                if (normalPictureBox.Image != null)
-                {
-                    alignedImage = new Bitmap(normalPictureBox.Image);
-                }
-
-                // Show preview and save
-                imageCaptureService.ShowPreviewAndSave(depthImage, alignedImage, normalImage);
-
-                // Cleanup
-                depthImage?.Dispose();
-                alignedImage?.Dispose();
-                normalImage?.Dispose();
+                MessageBox.Show("No images available.", "Info", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
             }
-            catch (Exception ex)
-            {
-                MessageBox.Show($"Error capturing images: {ex.Message}", "Error",
-                    MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
+
+            // Show preview and save
+            imageCaptureService.ShowPreviewAndSave(
+                new Bitmap(depthImg),
+                new Bitmap(colorImg),
+                colorService.FullColorBitmap);
         }
 
         #region SideBox Mouse Events

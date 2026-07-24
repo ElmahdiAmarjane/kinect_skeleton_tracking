@@ -29,25 +29,28 @@ namespace kinectProject
         {
             int width = 512;
             int height = 424;
-            int centerX = width / 2;
             Bitmap sideView = new Bitmap(sideBox.Width, sideBox.Height);
 
             List<System.Drawing.PointF> rawPoints = new List<System.Drawing.PointF>();
             float maxZ = float.MinValue;
             MaxZIndex = -1;
 
+            // ✅ Use body joints to define spine center line (most reliable)
             CameraSpacePoint neckPos = trackedBody.Joints[JointType.Neck].Position;
+            CameraSpacePoint midPos = trackedBody.Joints[JointType.SpineMid].Position;
             CameraSpacePoint basePos = trackedBody.Joints[JointType.SpineBase].Position;
 
-            ushort referenceDepth = (ushort)(trackedBody.Joints[JointType.SpineShoulder].Position.Z * 1000);
-            ushort minDepth = (ushort)Math.Max(referenceDepth - 150, 500);
-            ushort maxDepth = (ushort)Math.Min(referenceDepth + 150, 3000);
+            DepthSpacePoint neckDP = coordinateMapper.MapCameraPointToDepthSpace(neckPos);
+            DepthSpacePoint midDP = coordinateMapper.MapCameraPointToDepthSpace(midPos);
+            DepthSpacePoint baseDP = coordinateMapper.MapCameraPointToDepthSpace(basePos);
 
-            DepthSpacePoint neckDepth = coordinateMapper.MapCameraPointToDepthSpace(neckPos);
-            DepthSpacePoint baseDepth = coordinateMapper.MapCameraPointToDepthSpace(basePos);
+            // ✅ Get body-tracked spine center X at different heights
+            float neckX = neckDP.X;
+            float midX = midDP.X;
+            float baseX = baseDP.X;
 
-            int startY = (int)Math.Max(0, neckDepth.Y);
-            int endY = (int)Math.Min(height - 1, baseDepth.Y);
+            int startY = (int)Math.Max(0, neckDP.Y);
+            int endY = (int)Math.Min(height - 1, baseDP.Y);
 
             if (endY <= startY)
             {
@@ -55,33 +58,58 @@ namespace kinectProject
                 return;
             }
 
+            // ✅ Use same window as depth service
+            ushort referenceDepth = (ushort)(midPos.Z * 1000);
+            ushort minDepth = (ushort)Math.Max(referenceDepth - 200, BODY_DETECTION_MIN_DEPTH);
+            ushort maxDepth = (ushort)Math.Min(referenceDepth + 200, BODY_DETECTION_MAX_DEPTH);
+
+            // ✅ Pre-calculate spine center line (linear interpolation between joints)
+            float totalRows = endY - startY;
 
             for (int y = startY; y <= endY; y++)
             {
-                List<float> zSamples = new List<float>();
+                // ✅ Calculate expected spine X at this Y using joint interpolation
+                float t = (y - startY) / totalRows;
+                float expectedX;
 
-                for (int dx = -2; dx <= 2; dx++)
+                if (t < 0.5f)
+                {
+                    // Between neck and mid
+                    expectedX = neckX + (midX - neckX) * (t * 2f);
+                }
+                else
+                {
+                    // Between mid and base
+                    expectedX = midX + (baseX - midX) * ((t - 0.5f) * 2f);
+                }
+
+                int centerX = (int)Math.Round(expectedX);
+                centerX = Math.Max(5, Math.Min(width - 6, centerX));
+
+                // ✅ Sample around expected spine position
+                List<float> validZ = new List<float>();
+
+                for (int dx = -5; dx <= 5; dx++)
                 {
                     int x = centerX + dx;
-                    if (x < 0 || x >= width)
-                        continue;
+                    if (x < 0 || x >= width) continue;
 
                     int index = y * width + x;
                     ushort depth = depthData[index];
 
-                    // ✅ Adaptive depth filtering
-                    if (depth == 0 || depth < minDepth || depth > maxDepth)
-                        continue;
-
-                    CameraSpacePoint cp = coordinateMapper.MapDepthPointToCameraSpace(
-                        new DepthSpacePoint { X = x, Y = y }, depth);
-
-                    zSamples.Add(cp.Z * 1000f);
+                    if (depth > 0 && depth >= minDepth && depth <= maxDepth)
+                    {
+                        CameraSpacePoint cp = coordinateMapper.MapDepthPointToCameraSpace(
+                            new DepthSpacePoint { X = x, Y = y }, depth);
+                        validZ.Add(cp.Z * 1000f);
+                    }
                 }
 
-                if (zSamples.Count >= 3)
+                // ✅ Use MEDIAN (robust against outliers) + need enough samples
+                if (validZ.Count >= 5)
                 {
-                    float medianZ = zSamples.OrderBy(z => z).ElementAt(zSamples.Count / 2);
+                    validZ.Sort();
+                    float medianZ = validZ[validZ.Count / 2];
 
                     rawPoints.Add(new System.Drawing.PointF(medianZ, y));
 
@@ -99,8 +127,9 @@ namespace kinectProject
                 return;
             }
 
+            // ✅ Light smoothing only - preserve real data
             var filtered = FilterDepthPoints(rawPoints);
-            var gaussianed = GaussianSmooth(filtered, 5, 2.0);
+            var gaussianed = GaussianSmooth(filtered, 2, 1.0); // Very gentle
             List<System.Drawing.PointF> smoothedPoints = InterpolateSpinePoints(gaussianed);
             LastSmoothedSpinePoints = smoothedPoints;
 
@@ -109,6 +138,17 @@ namespace kinectProject
                 g.Clear(Color.Black);
                 g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
 
+                // ✅ Draw raw points faintly
+                using (Brush rawBrush = new SolidBrush(Color.FromArgb(40, 40, 40)))
+                {
+                    foreach (var pt in rawPoints)
+                    {
+                        float rx = 50 + pt.X * 0.1f;
+                        g.FillEllipse(rawBrush, rx - 1, pt.Y - 1, 2, 2);
+                    }
+                }
+
+                // ✅ Draw smoothed curve
                 using (Pen spinePen = new Pen(Color.Cyan, 3))
                 {
                     for (int i = 1; i < smoothedPoints.Count; i++)
@@ -117,45 +157,40 @@ namespace kinectProject
                         float y1 = smoothedPoints[i - 1].Y;
                         float x2 = 50 + smoothedPoints[i].X * 0.1f;
                         float y2 = smoothedPoints[i].Y;
-
                         g.DrawLine(spinePen, x1, y1, x2, y2);
                     }
                 }
 
-                float deepestZ = float.MinValue;
-                float deepestX = 0;
-
-                for (int i = 0; i < smoothedPoints.Count; i++)
+                // ✅ Max depth marker
+                if (MaxZIndex >= 0 && MaxZIndex < smoothedPoints.Count)
                 {
-                    if (smoothedPoints[i].X > deepestZ)
+                    float deepestZ = smoothedPoints[MaxZIndex].X;
+                    float deepestX = 50 + deepestZ * 0.1f;
+                    float deepestY = smoothedPoints[MaxZIndex].Y;
+
+                    FixedDeepestXPixel = deepestX;
+
+                    g.FillEllipse(Brushes.Red, deepestX - 5, deepestY - 5, 10, 10);
+                    g.DrawEllipse(Pens.White, deepestX - 5, deepestY - 5, 10, 10);
+
+                    using (Pen redPen = new Pen(Color.Red, 2)
                     {
-                        deepestZ = smoothedPoints[i].X;
-                        deepestX = smoothedPoints[i].X;
-                        MaxZIndex = i;
+                        DashStyle = System.Drawing.Drawing2D.DashStyle.Dash
+                    })
+                    {
+                        g.DrawLine(redPen, deepestX, 0, deepestX, sideView.Height);
                     }
+
+                    g.DrawString($"Max: {deepestZ:F0} mm",
+                        new Font("Arial", 9, FontStyle.Bold),
+                        Brushes.White, deepestX + 8, deepestY - 15);
                 }
-
-                float refX = 50 + deepestX * 0.1f;
-                FixedDeepestXPixel = refX;
-
-                using (Pen redPen = new Pen(Color.Red, 2)
-                {
-                    DashStyle = System.Drawing.Drawing2D.DashStyle.Dash
-                })
-                {
-                    g.DrawLine(redPen, refX, 0, refX, sideView.Height);
-                }
-
-                g.DrawString($"Deepest Z: {deepestZ:F0} mm",
-                    new Font("Arial", 9),
-                    Brushes.White,
-                    refX + 5,
-                    10);
             }
 
             sideBox.Image?.Dispose();
             sideBox.Image = sideView;
         }
+
 
         public double CalculateSpineAngle(Body body)
         {
@@ -397,5 +432,27 @@ namespace kinectProject
             }
             return interpolated;
         }
+
+        public void LoadCurveData(SpineCurveData data)
+        {
+            LastSmoothedSpinePoints = data.GetPointFList();
+            MaxZIndex = data.MaxZIndex;
+            ManualZRef = data.ManualZRef;
+            FixedDeepestXPixel = data.FixedDeepestXPixel;
+        }
+
+        // Add this method alongside LoadCurveData:
+        public SpineCurveData SaveCurveData()
+        {
+            return new SpineCurveData
+            {
+                CaptureTime = DateTime.Now,
+                Points = LastSmoothedSpinePoints.Select(p => PointFData.FromPointF(p)).ToList(),
+                MaxZIndex = MaxZIndex,
+                ManualZRef = ManualZRef,
+                FixedDeepestXPixel = FixedDeepestXPixel
+            };
+        }
+
     }
 }

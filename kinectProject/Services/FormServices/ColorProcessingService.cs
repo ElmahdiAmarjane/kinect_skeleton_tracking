@@ -63,8 +63,8 @@ namespace kinectProject
                 fullColorBitmap.UnlockBits(fullBmpData);
             }
 
-            ushort minDepth = (ushort)Math.Max(referenceDepth - 150, 500);
-            ushort maxDepth = (ushort)Math.Min(referenceDepth + 150, 3000);
+            ushort minDepth = (ushort)Math.Max(referenceDepth - 500, 500);
+            ushort maxDepth = (ushort)Math.Min(referenceDepth + 500, 3000);
 
             Bitmap alignedBitmap = new Bitmap(depthWidth, depthHeight, PixelFormat.Format32bppArgb);
             BitmapData bmpData = alignedBitmap.LockBits(
