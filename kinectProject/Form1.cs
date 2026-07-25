@@ -307,22 +307,23 @@ namespace kinectProject
             toolbar.Controls.Add(CreateSeparator());
             toolbar.Controls.Add(btnSaveDepthImage);
             toolbar.Controls.Add(btnSaveImage);
-            toolbar.Controls.Add(CreateSeparator());
             toolbar.Controls.Add(btnNormalImage);
             toolbar.Controls.Add(btnCaptureAll);
             toolbar.Controls.Add(CreateSeparator());
             toolbar.Controls.Add(sagittalBtn);
             toolbar.Controls.Add(exportBtn);
-            toolbar.Controls.Add(CreateSeparator());
             toolbar.Controls.Add(btnExportData);
             toolbar.Controls.Add(btnImportData);
+            toolbar.Controls.Add(CreateSeparator());
             //toolbar.Controls.Add(CreateSeparator());
-            toolbar.Controls.Add(generatePdfButton);
-            //toolbar.Controls.Add(CreateSeparator());
+
+            
             toolbar.Controls.Add(toggleInfoBtn);
-    
+            toolbar.Controls.Add(CreateSeparator());
             toolbar.Controls.Add(btnFreeze);
             toolbar.Controls.Add(btnLive);
+
+            toolbar.Controls.Add(generatePdfButton);
 
             // Tooltips
             ToolTip toolTip = new ToolTip();
@@ -592,15 +593,41 @@ namespace kinectProject
             {
                 if (inputForm.ShowDialog() == DialogResult.OK)
                 {
-                    var depthImage = isFrozen ? frozenDepthImage : depthPictureBox?.Image;
-                    var colorImage = isFrozen ? frozenColorImage : normalPictureBox?.Image;
-                    var splineImage = isFrozen && frozenCurveData != null ?
-                        GenerateFrozenCurveImage() :
-                        spineService.GenerateSpineCurveImageForPdf(500, 600);
+                    // ✅ Get fresh bitmaps (not from PictureBox which may be disposed)
+                    Bitmap depthImage = null;
+                    Bitmap colorImage = null;
+                    Bitmap splineImage = null;
+
+                    if (isFrozen)
+                    {
+                        depthImage = frozenDepthImage != null ? new Bitmap(frozenDepthImage) : null;
+                        colorImage = frozenColorImage != null ? new Bitmap(frozenColorImage) : null;
+                        splineImage = frozenCurveData != null ? GenerateFrozenCurveImage() : null;
+                    }
+                    else
+                    {
+                        depthImage = depthService.GetSafeDepthBitmap();
+
+                        if (normalPictureBox.Image != null)
+                            colorImage = new Bitmap(normalPictureBox.Image);
+
+                        splineImage = spineService.GenerateSpineCurveImageForPdf(500, 600);
+                    }
+
+                    float deepestZ = spineService.LastSmoothedSpinePoints != null &&
+                        spineService.MaxZIndex >= 0 &&
+                        spineService.MaxZIndex < spineService.LastSmoothedSpinePoints.Count
+                        ? spineService.LastSmoothedSpinePoints[spineService.MaxZIndex].X
+                        : 0;
 
                     pdfReportService.GeneratePatientReport(
                         inputForm, depthImage, colorImage, splineImage,
-                        spineService, depthPictureBox);
+                        spineAngle, deepestZ);
+
+                    // Cleanup
+                    depthImage?.Dispose();
+                    colorImage?.Dispose();
+                    splineImage?.Dispose();
                 }
             }
         }

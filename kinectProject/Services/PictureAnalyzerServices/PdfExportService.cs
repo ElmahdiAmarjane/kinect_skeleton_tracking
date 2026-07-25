@@ -590,7 +590,7 @@ namespace kinectProject
             iTextFont font)
         {
             // ID column
-            table.AddCell(new iTextPdfPCell(new iTextPhrase($"P{ip.ID}", font))
+            table.AddCell(new iTextPdfPCell(new iTextPhrase($"I{ip.ID}", font))
             {
                 Padding = 5,
                 HorizontalAlignment = Element.ALIGN_CENTER

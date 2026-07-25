@@ -6,28 +6,25 @@ namespace kinectProject
 {
     public class DetectionSettingsDialog : Form
     {
-        private ComboBox colorComboBox;
-        private Button colorPickerButton;
         private TrackBar toleranceTrackBar;
         private NumericUpDown minSizeNumeric;
         private NumericUpDown maxSizeNumeric;
-        private ColorDialog colorDialog;
         private Label toleranceValueLabel;
-
-        public PointColor SelectedColor { get; private set; }
-        public Color CustomColor { get; private set; }
+        private RadioButton rbAutoDetect;
+        private RadioButton rbSampleColor;
+        private RadioButton rbManualAdd;
+        private RadioButton rbPresetColor;
         public int Tolerance { get; private set; }
         public int MinSize { get; private set; }
         public int MaxSize { get; private set; }
+        public string DetectionMethod { get; private set; } // "sample", "preset", "manual"
 
-        public DetectionSettingsDialog(PointColor defaultColor, Color customColor,
-                                      int defaultTolerance, int defaultMinSize, int defaultMaxSize)
+        public DetectionSettingsDialog(int defaultTolerance, int defaultMinSize, int defaultMaxSize)
         {
-            SelectedColor = defaultColor;
-            CustomColor = customColor;
             Tolerance = defaultTolerance;
             MinSize = defaultMinSize;
             MaxSize = defaultMaxSize;
+            DetectionMethod = "sample";
 
             InitializeComponent();
             LoadSettings();
@@ -36,7 +33,7 @@ namespace kinectProject
         private void InitializeComponent()
         {
             this.Text = "Point Detection Settings";
-            this.Size = new Size(400, 280);
+            this.Size = new Size(400, 350);
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
             this.StartPosition = FormStartPosition.CenterParent;
             this.MaximizeBox = false;
@@ -44,193 +41,198 @@ namespace kinectProject
             this.BackColor = Color.FromArgb(45, 45, 48);
             this.ForeColor = Color.White;
 
-            // Color selection
-            Label colorLabel = new Label
-            {
-                Text = "Sticker Color:",
-                Location = new Point(20, 20),
-                Size = new Size(100, 20),
-                ForeColor = Color.White
-            };
+            int yPos = 15;
 
-            colorComboBox = new ComboBox
+            // Detection method
+            Label methodLabel = new Label
             {
-                Location = new Point(130, 20),
-                Size = new Size(150, 25),
-                DropDownStyle = ComboBoxStyle.DropDownList,
-                BackColor = Color.FromArgb(62, 62, 64),
+                Text = "Detection Method:",
+                Location = new Point(20, yPos),
+                Size = new Size(350, 22),
                 ForeColor = Color.White,
-                FlatStyle = FlatStyle.Flat
+                Font = new Font("Segoe UI", 10, FontStyle.Bold)
             };
-            colorComboBox.Items.AddRange(new string[] { "Red", "Green", "Blue", "Yellow", "White", "Custom" });
-            colorComboBox.SelectedIndexChanged += ColorComboBox_SelectedIndexChanged;
+            yPos += 28;
 
-            colorPickerButton = new Button
+            rbSampleColor = new RadioButton
             {
-                Text = "Pick Color",
-                Location = new Point(290, 20),
-                Size = new Size(80, 25),
-                Enabled = false,
-                BackColor = Color.FromArgb(62, 62, 64),
-                ForeColor = Color.White,
-                FlatStyle = FlatStyle.Flat
+                Text = "🖱️ Sample a point color (Recommended)",
+                Location = new Point(30, yPos),
+                Size = new Size(340, 22),
+                ForeColor = Color.LightGreen,
+                BackColor = Color.Transparent,
+                Checked = true,
+                Font = new Font("Segoe UI", 9, FontStyle.Regular)
             };
-            colorPickerButton.Click += ColorPickerButton_Click;
+            yPos += 26;
 
-            // Color tolerance
+            rbPresetColor = new RadioButton
+            {
+                Text = "🎨 Use preset color (Red/Green/Blue)",
+                Location = new Point(30, yPos),
+                Size = new Size(340, 22),
+                ForeColor = Color.White,
+                BackColor = Color.Transparent,
+                Font = new Font("Segoe UI", 9, FontStyle.Regular)
+            };
+            yPos += 26;
+
+            rbManualAdd = new RadioButton
+            {
+                Text = "✏️ Add points manually one by one",
+                Location = new Point(30, yPos),
+                Size = new Size(340, 22),
+                ForeColor = Color.White,
+                BackColor = Color.Transparent,
+                Font = new Font("Segoe UI", 9, FontStyle.Regular)
+            };
+            yPos += 35;
+
+            // Separator
+            Label sep = new Label
+            {
+                Text = "Detection Parameters",
+                Location = new Point(20, yPos),
+                Size = new Size(350, 22),
+                ForeColor = Color.Cyan,
+                Font = new Font("Segoe UI", 9, FontStyle.Bold)
+            };
+            yPos += 28;
+
+            // Tolerance
             Label toleranceLabel = new Label
             {
                 Text = "Color Tolerance:",
-                Location = new Point(20, 60),
-                Size = new Size(100, 20),
+                Location = new Point(20, yPos),
+                Size = new Size(110, 20),
                 ForeColor = Color.White
             };
 
             toleranceValueLabel = new Label
             {
-                Location = new Point(330, 60),
+                Location = new Point(340, yPos),
                 Size = new Size(40, 20),
-                ForeColor = Color.Yellow
+                ForeColor = Color.Yellow,
+                TextAlign = ContentAlignment.MiddleRight
             };
 
             toleranceTrackBar = new TrackBar
             {
-                Location = new Point(130, 60),
+                Location = new Point(130, yPos - 2),
                 Size = new Size(200, 45),
-                Minimum = 10,
-                Maximum = 100,
-                TickFrequency = 10,
+                Minimum = 5,
+                Maximum = 80,
+                TickFrequency = 5,
                 Value = 30,
                 BackColor = Color.FromArgb(45, 45, 48)
             };
-            toleranceTrackBar.ValueChanged += (s, e) =>
-            {
-                toleranceValueLabel.Text = toleranceTrackBar.Value.ToString();
-            };
+            toleranceTrackBar.ValueChanged += (s, e) => toleranceValueLabel.Text = toleranceTrackBar.Value.ToString();
+            yPos += 45;
 
-            // Minimum point size
+            // Min size
             Label minSizeLabel = new Label
             {
-                Text = "Min Point Size:",
-                Location = new Point(20, 110),
-                Size = new Size(100, 20),
+                Text = "Min Point Size (px):",
+                Location = new Point(20, yPos),
+                Size = new Size(130, 25),
                 ForeColor = Color.White
             };
 
             minSizeNumeric = new NumericUpDown
             {
-                Location = new Point(130, 110),
-                Size = new Size(100, 25),
-                Minimum = 1,
-                Maximum = 50,
+                Location = new Point(155, yPos),
+                Size = new Size(70, 25),
+                Minimum = 2,
+                Maximum = 100,
                 Value = 5,
                 BackColor = Color.FromArgb(62, 62, 64),
                 ForeColor = Color.White,
                 BorderStyle = BorderStyle.FixedSingle
             };
+            yPos += 30;
 
-            // Maximum point size
+            // Max size
             Label maxSizeLabel = new Label
             {
-                Text = "Max Point Size:",
-                Location = new Point(20, 150),
-                Size = new Size(100, 20),
+                Text = "Max Point Size (px):",
+                Location = new Point(20, yPos),
+                Size = new Size(130, 25),
                 ForeColor = Color.White
             };
 
             maxSizeNumeric = new NumericUpDown
             {
-                Location = new Point(130, 150),
-                Size = new Size(100, 25),
+                Location = new Point(155, yPos),
+                Size = new Size(70, 25),
                 Minimum = 5,
-                Maximum = 100,
+                Maximum = 200,
                 Value = 30,
                 BackColor = Color.FromArgb(62, 62, 64),
                 ForeColor = Color.White,
                 BorderStyle = BorderStyle.FixedSingle
             };
+            yPos += 40;
 
             // Buttons
             Button detectButton = new Button
             {
-                Text = "Detect Points",
+                Text = "Start Detection",
                 DialogResult = DialogResult.OK,
-                Location = new Point(100, 200),
-                Size = new Size(100, 30),
+                Location = new Point(100, yPos),
+                Size = new Size(120, 35),
                 BackColor = Color.FromArgb(0, 122, 204),
                 ForeColor = Color.White,
-                FlatStyle = FlatStyle.Flat
+                FlatStyle = FlatStyle.Flat,
+                Font = new Font("Segoe UI", 10, FontStyle.Bold)
             };
+            detectButton.FlatAppearance.BorderSize = 0;
 
             Button cancelButton = new Button
             {
                 Text = "Cancel",
                 DialogResult = DialogResult.Cancel,
-                Location = new Point(220, 200),
-                Size = new Size(100, 30),
+                Location = new Point(230, yPos),
+                Size = new Size(100, 35),
                 BackColor = Color.FromArgb(62, 62, 64),
                 ForeColor = Color.White,
                 FlatStyle = FlatStyle.Flat
             };
-
-            // Tips
-            Label tipsLabel = new Label
-            {
-                Text = "Tips: Use bright, solid-colored stickers.\nEnsure good lighting and contrast.\nAvoid colors similar to background.",
-                Location = new Point(20, 240),
-                Size = new Size(350, 40),
-                ForeColor = Color.LightGray,
-                Font = new Font("Arial", 8, FontStyle.Italic)
-            };
+            cancelButton.FlatAppearance.BorderSize = 0;
 
             this.Controls.AddRange(new Control[]
             {
-                colorLabel, colorComboBox, colorPickerButton,
+                methodLabel, rbSampleColor, rbPresetColor, rbManualAdd, sep,
                 toleranceLabel, toleranceValueLabel, toleranceTrackBar,
                 minSizeLabel, minSizeNumeric,
                 maxSizeLabel, maxSizeNumeric,
-                detectButton, cancelButton, tipsLabel
+                detectButton, cancelButton
             });
 
             this.AcceptButton = detectButton;
             this.CancelButton = cancelButton;
+
+            // Update detection method on radio change
+            rbSampleColor.CheckedChanged += (s, e) => { if (rbSampleColor.Checked) DetectionMethod = "sample"; };
+            rbPresetColor.CheckedChanged += (s, e) => { if (rbPresetColor.Checked) DetectionMethod = "preset"; };
+            rbManualAdd.CheckedChanged += (s, e) => { if (rbManualAdd.Checked) DetectionMethod = "manual"; };
         }
 
         private void LoadSettings()
         {
-            colorComboBox.SelectedIndex = (int)SelectedColor;
             toleranceTrackBar.Value = Tolerance;
             toleranceValueLabel.Text = Tolerance.ToString();
             minSizeNumeric.Value = MinSize;
             maxSizeNumeric.Value = MaxSize;
         }
 
-        private void ColorComboBox_SelectedIndexChanged(object sender, EventArgs e)
-        {
-            colorPickerButton.Enabled = (colorComboBox.SelectedIndex == 5); // Custom
-        }
-
-        private void ColorPickerButton_Click(object sender, EventArgs e)
-        {
-            if (colorDialog == null)
-                colorDialog = new ColorDialog();
-
-            if (colorDialog.ShowDialog() == DialogResult.OK)
-            {
-                CustomColor = colorDialog.Color;
-            }
-        }
-
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
             if (this.DialogResult == DialogResult.OK)
             {
-                SelectedColor = (PointColor)colorComboBox.SelectedIndex;
                 Tolerance = toleranceTrackBar.Value;
                 MinSize = (int)minSizeNumeric.Value;
                 MaxSize = (int)maxSizeNumeric.Value;
             }
-
             base.OnFormClosing(e);
         }
     }

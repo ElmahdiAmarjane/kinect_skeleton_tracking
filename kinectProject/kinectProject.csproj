@@ -118,6 +118,9 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="Services\ImageCaptureService.cs" />
+    <Compile Include="UI\Dialogs\ConnectPointsDialog.cs">
+      <SubType>Form</SubType>
+    </Compile>
     <Compile Include="UI\Dialogs\FoReferenceInputDialog.cs">
       <SubType>Form</SubType>
     </Compile>
@@ -187,6 +190,9 @@
     <Compile Include="UI\Dialogs\RenameDialog.cs">
       <SubType>Form</SubType>
     </Compile>
+    <Compile Include="UI\Dialogs\SimpleConnectDialog.cs">
+      <SubType>Form</SubType>
+    </Compile>
     <Compile Include="UI\Viewers\CurveDataViewer.cs">
       <SubType>Form</SubType>
     </Compile>
@@ -195,6 +201,9 @@
     </Compile>
     <EmbeddedResource Include="BodyPictureAnalyzer.resx">
       <DependentUpon>BodyPictureAnalyzer.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="UI\Dialogs\DetectionSettingsDialog.resx">
+      <DependentUpon>DetectionSettingsDialog.cs</DependentUpon>
     </EmbeddedResource>
     <EmbeddedResource Include="UI\Dialogs\FoReferenceInputDialog.resx">
       <DependentUpon>FoReferenceInputDialog.cs</DependentUpon>
@@ -213,6 +222,9 @@
     </Compile>
     <EmbeddedResource Include="UI\Dialogs\RenameDialog.resx">
       <DependentUpon>RenameDialog.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="UI\Dialogs\SimpleConnectDialog.resx">
+      <DependentUpon>SimpleConnectDialog.cs</DependentUpon>
     </EmbeddedResource>
     <EmbeddedResource Include="UI\Viewers\CurveDataViewer.resx">
       <DependentUpon>CurveDataViewer.cs</DependentUpon>

@@ -691,133 +691,112 @@ namespace kinectProject
         }
 
         /// <summary>
-        /// Show detection confirmation dialog
+        /// Simple confirmation: show image with detected points highlighted
         /// </summary>
         public bool ShowDetectionConfirmation(List<DetectedPoint> points, Bitmap originalImage)
         {
             if (points.Count == 0) return false;
 
-            bool accepted = false;
-
-            using (Bitmap bmp = new Bitmap(originalImage))
-            using (Graphics g = Graphics.FromImage(bmp))
+            using (Bitmap preview = new Bitmap(originalImage))
+            using (Graphics g = Graphics.FromImage(preview))
             {
-                foreach (var point in points)
-                {
-                    int pointRadius = point.Radius;
-                    int circleRadius = pointRadius + 10;
+                g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
 
+                foreach (var point in points.OrderBy(p => p.ID))
+                {
+                    // Draw circle
                     using (Pen pen = new Pen(Color.Lime, 3))
                     {
                         g.DrawEllipse(pen,
-                            point.Location.X - circleRadius,
-                            point.Location.Y - circleRadius,
-                            circleRadius * 2,
-                            circleRadius * 2);
+                            point.Location.X - point.Radius - 5,
+                            point.Location.Y - point.Radius - 5,
+                            (point.Radius + 5) * 2,
+                            (point.Radius + 5) * 2);
                     }
 
+                    // Draw ID number
                     using (Font font = new Font("Arial", 12, FontStyle.Bold))
-                    using (Brush brush = new SolidBrush(Color.White))
-                    using (Brush bgBrush = new SolidBrush(Color.FromArgb(128, Color.Black)))
+                    using (Brush bgBrush = new SolidBrush(Color.FromArgb(200, Color.Black)))
+                    using (Brush textBrush = new SolidBrush(Color.Yellow))
                     {
-                        string idText = point.ID.ToString();
-                        SizeF textSize = g.MeasureString(idText, font);
+                        string text = point.ID.ToString();
+                        SizeF size = g.MeasureString(text, font);
 
                         g.FillRectangle(bgBrush,
-                            point.Location.X - textSize.Width / 2 - 2,
-                            point.Location.Y - circleRadius - textSize.Height - 5,
-                            textSize.Width + 4,
-                            textSize.Height + 2);
+                            point.Location.X - size.Width / 2 - 3,
+                            point.Location.Y - point.Radius - size.Height - 15,
+                            size.Width + 6, size.Height + 4);
 
-                        g.DrawString(idText, font, brush,
-                            point.Location.X - textSize.Width / 2,
-                            point.Location.Y - circleRadius - textSize.Height - 3);
-                    }
-
-                    using (Font smallFont = new Font("Arial", 8))
-                    using (Brush confBrush = new SolidBrush(Color.Cyan))
-                    {
-                        string confText = $"{(point.Confidence * 100):F0}%";
-                        SizeF confSize = g.MeasureString(confText, smallFont);
-
-                        g.DrawString(confText, smallFont, confBrush,
-                            point.Location.X - confSize.Width / 2,
-                            point.Location.Y + circleRadius + 5);
+                        g.DrawString(text, font, textBrush,
+                            point.Location.X - size.Width / 2,
+                            point.Location.Y - point.Radius - size.Height - 13);
                     }
                 }
-
-                string previewPath = Path.Combine(Path.GetTempPath(), "detection_result.png");
-                bmp.Save(previewPath);
 
                 using (Form previewForm = new Form())
                 {
-                    previewForm.Text = "Detection Results - Preview";
-                    previewForm.Size = new Size(800, 600);
+                    previewForm.Text = $"{points.Count} Markers Detected";
+                    previewForm.Size = new Size(700, 500);
                     previewForm.StartPosition = FormStartPosition.CenterParent;
                     previewForm.BackColor = Color.FromArgb(45, 45, 48);
 
-                    PictureBox previewBox = new PictureBox
+                    PictureBox pb = new PictureBox
                     {
                         Dock = DockStyle.Fill,
-                        Image = new Bitmap(bmp),
+                        Image = new Bitmap(preview),
                         SizeMode = PictureBoxSizeMode.Zoom
                     };
+                    previewForm.Controls.Add(pb);
 
-                    Button acceptBtn = new Button
+                    Panel buttonPanel = new Panel
                     {
-                        Text = "✓ Accept Detections",
                         Dock = DockStyle.Bottom,
-                        Height = 40,
-                        BackColor = Color.FromArgb(0, 122, 204),
-                        ForeColor = Color.White,
-                        FlatStyle = FlatStyle.Flat,
-                        Font = new Font("Arial", 10, FontStyle.Bold)
+                        Height = 50,
+                        BackColor = Color.FromArgb(35, 35, 40)
                     };
 
-                    Button rejectBtn = new Button
+                    Button btnAccept = new Button
                     {
-                        Text = "✗ Reject Detections",
-                        Dock = DockStyle.Bottom,
-                        Height = 40,
-                        BackColor = Color.FromArgb(64, 64, 64),
+                        Text = $"✓ Accept {points.Count} Points",
+                        Dock = DockStyle.Right,
+                        Width = 160,
+                        BackColor = Color.FromArgb(0, 122, 204),
                         ForeColor = Color.White,
                         FlatStyle = FlatStyle.Flat
                     };
+                    btnAccept.FlatAppearance.BorderSize = 0;
+                    btnAccept.Click += (s, ev) => { previewForm.DialogResult = DialogResult.OK; previewForm.Close(); };
 
-                    Label infoLabel = new Label
+                    Button btnReject = new Button
                     {
-                        Text = $"Found {points.Count} stickers. Green circles show detected points.",
-                        Dock = DockStyle.Top,
-                        Height = 30,
-                        TextAlign = ContentAlignment.MiddleCenter,
+                        Text = "✗ Cancel",
+                        Dock = DockStyle.Left,
+                        Width = 100,
+                        BackColor = Color.FromArgb(62, 62, 64),
                         ForeColor = Color.White,
-                        BackColor = Color.FromArgb(64, 64, 64)
+                        FlatStyle = FlatStyle.Flat
                     };
+                    btnReject.FlatAppearance.BorderSize = 0;
+                    btnReject.Click += (s, ev) => { previewForm.DialogResult = DialogResult.Cancel; previewForm.Close(); };
 
-                    acceptBtn.Click += (s, e) =>
+                    Label lblInfo = new Label
                     {
-                        accepted = true;
-                        previewForm.Close();
+                        Text = $"Points ordered top-to-bottom | Green circles = detected markers",
+                        Dock = DockStyle.Fill,
+                        ForeColor = Color.LightGray,
+                        TextAlign = ContentAlignment.MiddleCenter,
+                        Font = new Font("Segoe UI", 9)
                     };
 
-                    rejectBtn.Click += (s, e) =>
-                    {
-                        accepted = false;
-                        previewForm.Close();
-                    };
+                    buttonPanel.Controls.Add(btnAccept);
+                    buttonPanel.Controls.Add(btnReject);
+                    buttonPanel.Controls.Add(lblInfo);
+                    previewForm.Controls.Add(buttonPanel);
 
-                    previewForm.Controls.Add(previewBox);
-                    previewForm.Controls.Add(acceptBtn);
-                    previewForm.Controls.Add(rejectBtn);
-                    previewForm.Controls.Add(infoLabel);
-
-                    previewForm.ShowDialog();
+                    return previewForm.ShowDialog() == DialogResult.OK;
                 }
             }
-
-            return accepted;
         }
-
         /// <summary>
         /// Show color preview and detection dialog
         /// </summary>
@@ -1176,9 +1155,12 @@ namespace kinectProject
             ref int idCounter,
             bool autoRenameEnabled)
         {
+            int existingPointCount = measurements.Count(m => m.Type == MeasurementType.Point);
+
             foreach (var detectedPoint in detectedPoints)
             {
-                string pointName = $"P{detectedPoint.ID}";
+                string pointName = $"P{existingPointCount + 1}";
+                existingPointCount++;
 
                 if (autoRenameEnabled)
                 {
@@ -1189,6 +1171,7 @@ namespace kinectProject
                             pointName = string.IsNullOrWhiteSpace(renameDialog.NewName) ?
                                        pointName : renameDialog.NewName.Trim();
                         }
+                        // Cancel = keep default name
                     }
                 }
 
@@ -1202,7 +1185,268 @@ namespace kinectProject
                 measurements.Add(measurement);
             }
         }
-
         #endregion
+
+
+        /// <summary>
+        /// Doctor clicks one point, we sample its color and find all similar points
+        /// </summary>
+        public List<DetectedPoint> DetectByColorSample(Bitmap image, Point samplePoint,
+            int tolerance, int minSize, int maxSize)
+        {
+            var points = new List<DetectedPoint>();
+
+            if (image == null) return points;
+            if (samplePoint.X < 0 || samplePoint.X >= image.Width ||
+                samplePoint.Y < 0 || samplePoint.Y >= image.Height)
+                return points;
+
+            // Sample the color at the clicked point
+            Color targetColor = image.GetPixel(samplePoint.X, samplePoint.Y);
+
+            // Also sample surrounding pixels for better color average
+            int sampleRadius = 3;
+            int totalR = 0, totalG = 0, totalB = 0, count = 0;
+
+            for (int dy = -sampleRadius; dy <= sampleRadius; dy++)
+            {
+                for (int dx = -sampleRadius; dx <= sampleRadius; dx++)
+                {
+                    int sx = samplePoint.X + dx;
+                    int sy = samplePoint.Y + dy;
+                    if (sx >= 0 && sx < image.Width && sy >= 0 && sy < image.Height)
+                    {
+                        Color c = image.GetPixel(sx, sy);
+                        totalR += c.R;
+                        totalG += c.G;
+                        totalB += c.B;
+                        count++;
+                    }
+                }
+            }
+
+            targetColor = Color.FromArgb(totalR / count, totalG / count, totalB / count);
+
+            // Use existing flexible detection with sampled color
+            DetectColoredPointsFlexible(targetColor, image, PointColor.Custom,
+                tolerance, minSize, maxSize, targetColor, out points);
+
+            return points;
+        }
+
+        /// <summary>
+        /// Aggressive detection - finds ALL points of similar color
+        /// Designed for medical markers drawn on skin
+        /// </summary>
+        /// <summary>
+        /// Smart marker detection - finds brightly colored dots on skin
+        /// </summary>
+        public List<DetectedPoint> DetectAllMarkers(Bitmap image, Point samplePoint)
+        {
+            var points = new List<DetectedPoint>();
+            if (image == null) return points;
+            if (samplePoint.X < 0 || samplePoint.X >= image.Width ||
+                samplePoint.Y < 0 || samplePoint.Y >= image.Height)
+                return points;
+
+            // Sample the EXACT color at the clicked point
+            Color targetColor = image.GetPixel(samplePoint.X, samplePoint.Y);
+
+            // Also sample a 3x3 area around it
+            Color avgColor = SampleColorAtPoint(image, samplePoint, 1);
+
+            int width = image.Width;
+            int height = image.Height;
+            bool[,] visited = new bool[height, width];
+            int id = 1;
+
+            // Very strict: must be very close to target color
+            int strictThreshold = 40; // RGB distance max
+
+            // Find all blobs
+            for (int y = 0; y < height; y++)
+            {
+                for (int x = 0; x < width; x++)
+                {
+                    if (visited[y, x]) continue;
+
+                    Color pixel = image.GetPixel(x, y);
+
+                    // Quick check: is this pixel similar to our target?
+                    int rDiff = Math.Abs(pixel.R - targetColor.R);
+                    int gDiff = Math.Abs(pixel.G - targetColor.G);
+                    int bDiff = Math.Abs(pixel.B - targetColor.B);
+                    double dist = Math.Sqrt(rDiff * rDiff + gDiff * gDiff + bDiff * bDiff);
+
+                    if (dist > strictThreshold) continue;
+
+                    // Flood fill this blob
+                    var blob = new List<Point>();
+                    var queue = new Queue<Point>();
+                    queue.Enqueue(new Point(x, y));
+                    visited[y, x] = true;
+
+                    while (queue.Count > 0)
+                    {
+                        var p = queue.Dequeue();
+
+                        // Check bounds
+                        if (p.X < 0 || p.X >= width || p.Y < 0 || p.Y >= height)
+                            continue;
+
+                        Color pxl = image.GetPixel(p.X, p.Y);
+                        rDiff = Math.Abs(pxl.R - targetColor.R);
+                        gDiff = Math.Abs(pxl.G - targetColor.G);
+                        bDiff = Math.Abs(pxl.B - targetColor.B);
+                        dist = Math.Sqrt(rDiff * rDiff + gDiff * gDiff + bDiff * bDiff);
+
+                        if (dist > strictThreshold) continue;
+
+                        blob.Add(p);
+
+                        // Check neighbors
+                        for (int dy = -1; dy <= 1; dy++)
+                        {
+                            for (int dx = -1; dx <= 1; dx++)
+                            {
+                                if (dx == 0 && dy == 0) continue;
+                                int nx = p.X + dx;
+                                int ny = p.Y + dy;
+                                if (nx >= 0 && nx < width && ny >= 0 && ny < height && !visited[ny, nx])
+                                {
+                                    visited[ny, nx] = true;
+                                    queue.Enqueue(new Point(nx, ny));
+                                }
+                            }
+                        }
+                    }
+
+                    // Only accept blobs of reasonable size (a marker dot)
+                    if (blob.Count >= 5 && blob.Count <= 300)
+                    {
+                        // Calculate center of blob
+                        int cx = 0, cy = 0;
+                        foreach (var pt in blob) { cx += pt.X; cy += pt.Y; }
+                        cx /= blob.Count;
+                        cy /= blob.Count;
+
+                        // Verify the blob is roughly circular
+                        double avgDist = 0;
+                        foreach (var pt in blob)
+                        {
+                            avgDist += Math.Sqrt(Math.Pow(pt.X - cx, 2) + Math.Pow(pt.Y - cy, 2));
+                        }
+                        avgDist /= blob.Count;
+                        int radius = (int)avgDist;
+
+                        // Check if blob is too elongated (not a dot)
+                        int minX = blob.Min(pt => pt.X);
+                        int maxX = blob.Max(pt => pt.X);
+                        int minY = blob.Min(pt => pt.Y);
+                        int maxY = blob.Max(pt => pt.Y);
+                        int w = maxX - minX;
+                        int h = maxY - minY;
+
+                        double aspectRatio = (double)Math.Max(w, h) / Math.Max(1, Math.Min(w, h));
+
+                        // Accept if roughly circular (aspect ratio < 3)
+                        if (aspectRatio < 3.0 && radius >= 2 && radius <= 25)
+                        {
+                            points.Add(new DetectedPoint(
+                                new Point(cx, cy),
+                                PointColor.Custom,
+                                1.0,
+                                radius,
+                                id++));
+                        }
+                    }
+                }
+            }
+
+            // Sort by Y (top to bottom), then X (left to right) for consistent ordering
+            points = points.OrderBy(p => p.Location.Y)
+                           .ThenBy(p => p.Location.X)
+                           .ToList();
+
+            // Re-assign IDs
+            for (int i = 0; i < points.Count; i++)
+            {
+                var p = points[i];
+                points[i] = new DetectedPoint(p.Location, p.Color, p.Confidence, p.Radius, i + 1);
+            }
+
+            return points;
+        }
+
+        private Color SampleColorAtPoint(Bitmap image, Point center, int radius)
+        {
+            int totalR = 0, totalG = 0, totalB = 0, count = 0;
+
+            for (int dy = -radius; dy <= radius; dy++)
+            {
+                for (int dx = -radius; dx <= radius; dx++)
+                {
+                    int sx = center.X + dx;
+                    int sy = center.Y + dy;
+                    if (sx >= 0 && sx < image.Width && sy >= 0 && sy < image.Height)
+                    {
+                        Color c = image.GetPixel(sx, sy);
+                        totalR += c.R; totalG += c.G; totalB += c.B;
+                        count++;
+                    }
+                }
+            }
+            return Color.FromArgb(totalR / count, totalG / count, totalB / count);
+        }
+        
+        private bool IsSimilarColor(Color pixel, Color target, HsvColor targetHsv,
+            double rgbThreshold, float hueThreshold, float satThreshold, float valThreshold)
+        {
+            double rgbDist = Math.Sqrt(
+                Math.Pow(pixel.R - target.R, 2) +
+                Math.Pow(pixel.G - target.G, 2) +
+                Math.Pow(pixel.B - target.B, 2));
+
+            if (rgbDist <= rgbThreshold) return true;
+
+            HsvColor pixelHsv = RgbToHsv(pixel);
+            float hueDiff = Math.Abs(pixelHsv.H - targetHsv.H);
+            hueDiff = Math.Min(hueDiff, 360 - hueDiff);
+
+            return hueDiff <= hueThreshold &&
+                   Math.Abs(pixelHsv.S - targetHsv.S) <= satThreshold &&
+                   Math.Abs(pixelHsv.V - targetHsv.V) <= valThreshold;
+        }
+
+        private List<Point> FloodFillBlob(Bitmap image, int startX, int startY, bool[,] visited,
+            Color target, HsvColor targetHsv, double rgbThreshold, float hueThreshold,
+            float satThreshold, float valThreshold, int width, int height)
+        {
+            var blob = new List<Point>();
+            var queue = new Queue<Point>();
+            queue.Enqueue(new Point(startX, startY));
+
+            while (queue.Count > 0)
+            {
+                var p = queue.Dequeue();
+                if (p.X < 0 || p.X >= width || p.Y < 0 || p.Y >= height || visited[p.Y, p.X])
+                    continue;
+
+                Color pixel = image.GetPixel(p.X, p.Y);
+                if (!IsSimilarColor(pixel, target, targetHsv, rgbThreshold, hueThreshold, satThreshold, valThreshold))
+                    continue;
+
+                visited[p.Y, p.X] = true;
+                blob.Add(p);
+
+                // 8-connectivity
+                for (int dy = -1; dy <= 1; dy++)
+                    for (int dx = -1; dx <= 1; dx++)
+                        if (dx != 0 || dy != 0)
+                            queue.Enqueue(new Point(p.X + dx, p.Y + dy));
+            }
+
+            return blob;
+        }
     }
 }

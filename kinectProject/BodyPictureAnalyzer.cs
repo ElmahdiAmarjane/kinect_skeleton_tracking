@@ -9,14 +9,14 @@ using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 using System.Windows.Forms;
-
-using Timer = System.Windows.Forms.Timer;
-using Image = System.Drawing.Image;
 using Font = System.Drawing.Font;
+using Image = System.Drawing.Image;
+using Timer = System.Windows.Forms.Timer;
 
 
 namespace kinectProject
@@ -99,7 +99,7 @@ namespace kinectProject
         private const int intersectionTolerance = 10;
 
         // Line creation state
-        private bool autoRenameEnabled = true;
+        private bool autoRenameDisabled = false;
         private Point? selectedPointForLine = null;
         private bool isCreatingLineBetweenPoints = false;
         private Point? highlightedPoint = null;
@@ -108,6 +108,9 @@ namespace kinectProject
         private bool isPickingReferenceColor = false;
         private Color? referenceColor = null;
         private Point? pickedPointLocation = null;
+
+
+        private bool isUpdatingSelection = false;
 
         #endregion
 
@@ -465,15 +468,15 @@ namespace kinectProject
 
         private void BtnToggleAutoRename_Click(object sender, EventArgs e)
         {
-            autoRenameEnabled = !autoRenameEnabled;
+            autoRenameDisabled = !autoRenameDisabled;
 
             var button = sender as ToolStripButton;
             if (button != null)
             {
-                button.Text = autoRenameEnabled ? "🏷️ Auto-Rename: ON" : "🏷️ Auto-Rename: OFF";
+                button.Text = autoRenameDisabled ? "🏷️ Auto-Rename: OFF" : "🏷️ Auto-Rename: ON";
             }
 
-            UpdateStatus($"Auto-rename: {(autoRenameEnabled ? "Enabled" : "Disabled")}");
+            UpdateStatus($"Auto-rename: {(autoRenameDisabled ? "Disabled" : "Enabled")}");
         }
 
         private void BtnDetectPoints_Click(object sender, EventArgs e)
@@ -485,58 +488,150 @@ namespace kinectProject
                 return;
             }
 
-            using (var detectionDialog = new DetectionSettingsDialog(
-                selectedColor, customColor, detectionTolerance, minPointSize, maxPointSize))
+            // Clear previous points
+            detectedPoints.Clear();
+
+            // Show simple instruction
+            var result = MessageBox.Show(
+                "🖱️ CLICK on ONE marker point on the image to sample its color.\n\n" +
+                "All similar markers will be detected automatically.",
+                "Detect Markers - Step 1", MessageBoxButtons.OKCancel, MessageBoxIcon.Information);
+
+            if (result == DialogResult.Cancel) return;
+
+            UpdateStatus("👆 Click on a marker point to sample its color...");
+            drawingPanel.Cursor = Cursors.Cross;
+            isPickingReferenceColor = true;
+        }
+
+        /// <summary>
+        /// Process detected points: show preview, let doctor modify, then create measurements
+        /// </summary>
+        private void ProcessDetectedPoints()
+        {
+            if (detectedPoints.Count == 0) return;
+
+            bool accepted = detectionService.ShowDetectionConfirmation(detectedPoints, new Bitmap(originalImage));
+
+            if (accepted)
             {
-                if (detectionDialog.ShowDialog() == DialogResult.OK)
+                measurementService.CreateMeasurementsFromDetectedPoints(
+                    detectedPoints, measurements, ref idCounter, ref autoRenameDisabled);
+
+                intersectionService.FindAllIntersections(
+                    measurements, intersectionPoints, ref intersectionCounter, intersectionTolerance);
+
+                UpdateMeasurementsList();
+                drawingPanel.Invalidate();
+                UpdateStatus($"{detectedPoints.Count} points detected and added.");
+
+                // Auto-enable connect mode
+                var result = MessageBox.Show(
+                    "Points added successfully! Would you like to connect them now?",
+                    "Connect Points", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+
+                if (result == DialogResult.Yes)
                 {
-                    selectedColor = detectionDialog.SelectedColor;
-                    customColor = detectionDialog.CustomColor;
-                    detectionTolerance = detectionDialog.Tolerance;
-                    minPointSize = detectionDialog.MinSize;
-                    maxPointSize = detectionDialog.MaxSize;
+                    BtnConnectPoints_Click(null, null);
+                }
+            }
+            else
+            {
+                detectedPoints.Clear();
+                drawingPanel.Invalidate();
+            }
+        }
+        private void BtnConnectPoints_Click(object sender, EventArgs e)
+        {
+            var pointMeasurements = measurements
+                .Where(m => m.Type == MeasurementType.Point)
+                .OrderBy(m => m.Start.Y)
+                .ThenBy(m => m.Start.X)
+                .ToList();
 
-                    // Use automatic detection
-                    detectionService.DetectColoredPointsFlexible(
-                        null, new Bitmap(originalImage), selectedColor,
-                        detectionTolerance, minPointSize, maxPointSize, customColor,
-                        out detectedPoints);
+            if (pointMeasurements.Count < 2)
+            {
+                MessageBox.Show("You need at least 2 points to connect.\n\n" +
+                    "Add points first using 'Detect Points' or Point tool.",
+                    "Not Enough Points", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
 
-                    if (detectedPoints.Count > 0)
+            using (var connectDialog = new SimpleConnectDialog(pointMeasurements))
+            {
+                if (connectDialog.ShowDialog() == DialogResult.OK)
+                {
+                    Color lineColor = connectDialog.LineColor;
+
+                    if (connectDialog.ConnectAll)
                     {
-                        bool accepted = detectionService.ShowDetectionConfirmation(detectedPoints, new Bitmap(originalImage));
-
-                        if (accepted)
+                        // Chain all points in list order
+                        for (int i = 0; i < pointMeasurements.Count - 1; i++)
                         {
-                            measurementService.CreateMeasurementsFromDetectedPoints(
-                                detectedPoints, measurements, ref idCounter,
-                                autoRenameEnabled, ref autoRenameEnabled);
-                            UpdateMeasurementsList();
-                            drawingPanel.Invalidate();
+                            CreateLineBetweenTwoPoints(pointMeasurements[i], pointMeasurements[i + 1], lineColor);
                         }
-                        else
-                        {
-                            detectedPoints.Clear();
-                        }
+                        UpdateStatus($"✅ {pointMeasurements.Count - 1} connections created (chain)");
                     }
+                    else if (connectDialog.ConnectSelected && connectDialog.SelectedPoints.Count >= 2)
+                    {
+                        // Connect checked points in list order
+                        var selected = connectDialog.SelectedPoints;
+                        for (int i = 0; i < selected.Count - 1; i++)
+                        {
+                            CreateLineBetweenTwoPoints(selected[i], selected[i + 1], lineColor);
+                        }
+                        UpdateStatus($"✅ {selected.Count - 1} connections created (selected)");
+                    }
+                    else if (connectDialog.SelectedPoint1.HasValue && connectDialog.SelectedPoint2.HasValue)
+                    {
+                        // Connect two specific points
+                        CreateLineBetweenTwoPoints(connectDialog.SelectedPoint1.Value, connectDialog.SelectedPoint2.Value, lineColor);
+                        UpdateStatus($"✅ Line created");
+                    }
+
+                    intersectionService.FindAllIntersections(
+                        measurements, intersectionPoints, ref intersectionCounter, intersectionTolerance);
+
+                    UpdateMeasurementsList();
+                    drawingPanel.Invalidate();
                 }
             }
         }
 
-        private void BtnConnectPoints_Click(object sender, EventArgs e)
+        /// <summary>
+        /// Create a line between two points with specified color
+        /// </summary>
+        private void CreateLineBetweenTwoPoints(Measurement p1, Measurement p2, Color? color = null)
         {
-            if (detectedPoints.Count == 0)
+            string lineName = $"L{measurementCounter++}";
+
+            Measurement lineMeasurement = new Measurement(
+                p1.Start, p2.Start, lineName, MeasurementType.Line, idCounter++);
+
+            measurements.Add(lineMeasurement);
+        }
+
+        private void ConnectPointsInOrder()
+        {
+            var pointMeasurements = measurements
+                .Where(m => m.Type == MeasurementType.Point)
+                .OrderBy(m => m.Start.Y)
+                .ThenBy(m => m.Start.X)
+                .ToList();
+
+            if (pointMeasurements.Count < 2) return;
+
+            for (int i = 0; i < pointMeasurements.Count - 1; i++)
             {
-                MessageBox.Show("No points detected. Use point detection first.",
-                               "Information", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                return;
+                CreateLineBetweenTwoPoints(pointMeasurements[i], pointMeasurements[i + 1]);
             }
 
-            isCreatingLineBetweenPoints = true;
-            selectedPointForLine = null;
-            UpdateStatus("Connection Mode: Click first point, then second point");
-            drawingPanel.Cursor = Cursors.Hand;
+            intersectionService.FindAllIntersections(
+                measurements, intersectionPoints, ref intersectionCounter, intersectionTolerance);
+
+            UpdateMeasurementsList();
             drawingPanel.Invalidate();
+            UpdateStatus($"✅ {pointMeasurements.Count - 1} connections created");
         }
 
         private void SimpleDetectionTest()
@@ -550,8 +645,7 @@ namespace kinectProject
             if (detectedPoints.Count > 0)
             {
                 measurementService.CreateMeasurementsFromDetectedPoints(
-                    detectedPoints, measurements, ref idCounter,
-                    autoRenameEnabled, ref autoRenameEnabled);
+                    detectedPoints, measurements, ref idCounter, ref autoRenameDisabled);
                 UpdateMeasurementsList();
                 drawingPanel.Invalidate();
             }
@@ -668,7 +762,7 @@ namespace kinectProject
                     if (index >= 0)
                     {
                         measurementService.SelectMeasurement(index, measurements, measurementsList,
-                            ref selectedMeasurement, ref selectedMeasurementIndex);
+                            ref selectedMeasurement, ref selectedMeasurementIndex, ref isUpdatingSelection);
 
                         Measurement m = measurements[index];
                         if (m.Type == MeasurementType.Point)
@@ -824,23 +918,61 @@ namespace kinectProject
 
             if (isDraggingGrid) return;
 
-            // 3. COLOR PICKING MODE
+            // 3. COLOR PICKING MODE (Sample detection)
             if (isPickingReferenceColor && e.Button == MouseButtons.Left)
             {
-                using (Bitmap bmp = new Bitmap(originalImage))
-                {
-                    Color pickedColor = imageService.PickColorFromImage(bmp, imagePoint);
-                    referenceColor = pickedColor;
-                    pickedPointLocation = imagePoint;
-
-                    detectionService.ShowColorPreviewAndDetect(
-                        pickedColor, imagePoint, new Bitmap(originalImage),
-                        detectionTolerance, selectedColor, customColor,
-                        out detectedPoints);
-                }
-
                 isPickingReferenceColor = false;
                 drawingPanel.Cursor = Cursors.Default;
+
+                UpdateStatus("🔍 Detecting markers...");
+                this.Refresh();
+                Application.DoEvents();
+
+                using (Bitmap bmp = new Bitmap(originalImage))
+                {
+                    Color clickedColor = bmp.GetPixel(imagePoint.X, imagePoint.Y);
+                    UpdateStatus($"🎨 Sampled color: RGB({clickedColor.R},{clickedColor.G},{clickedColor.B}) - Detecting...");
+                    this.Refresh();
+
+                    detectedPoints = detectionService.DetectAllMarkers(bmp, imagePoint);
+                }
+
+                if (detectedPoints.Count == 0)
+                {
+                    UpdateStatus("❌ No markers found");
+                    MessageBox.Show("No markers detected. Try clicking directly on a marker center.",
+                        "Detection Failed", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+
+                bool accepted = detectionService.ShowDetectionConfirmation(detectedPoints, new Bitmap(originalImage));
+
+                if (!accepted)
+                {
+                    detectedPoints.Clear();
+                    drawingPanel.Invalidate();
+                    UpdateStatus("Detection cancelled");
+                    return;
+                }
+
+                UpdateStatus($"✅ Creating {detectedPoints.Count} markers...");
+
+                measurementService.CreateMeasurementsFromDetectedPoints(
+                    detectedPoints, measurements, ref idCounter,
+                    ref autoRenameDisabled);
+
+                UpdateMeasurementsList();
+                drawingPanel.Invalidate();
+                UpdateStatus($"✅ {detectedPoints.Count} markers added");
+
+                var connectResult = MessageBox.Show(
+                    $"{detectedPoints.Count} markers added.\n\nConnect them in order?",
+                    "Detection Complete", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+
+                if (connectResult == DialogResult.Yes)
+                {
+                    ConnectPointsInOrder();
+                }
                 return;
             }
 
@@ -849,7 +981,7 @@ namespace kinectProject
             {
                 detectionService.HandleManualPointDetection(
                     imagePoint, selectedColor, customColor,
-                    autoRenameEnabled, detectedPoints, measurements, ref idCounter);
+                    !autoRenameDisabled, detectedPoints, measurements, ref idCounter);
                 UpdateMeasurementsList();
                 drawingPanel.Invalidate();
                 return;
@@ -866,9 +998,44 @@ namespace kinectProject
             if (currentEditMode != EditMode.None && currentEditMode != EditMode.Normal && e.Button == MouseButtons.Left)
             {
                 HandleSelection(imagePoint);
+                return;
+            }
+
+            // ✅ 7. NORMAL MODE: Click to select point (sync with table)
+            if (e.Button == MouseButtons.Left && currentEditMode == EditMode.Normal)
+            {
+                int index = measurementService.FindMeasurementAtPoint(imagePoint, measurements);
+                if (index >= 0)
+                {
+                    // Select the measurement
+                    measurementService.SelectMeasurement(index, measurements, measurementsList,
+                        ref selectedMeasurement, ref selectedMeasurementIndex, ref isUpdatingSelection);
+
+                    // Also highlight in ListView
+                    if (measurementsList != null)
+                    {
+                        foreach (ListViewItem item in measurementsList.Items)
+                        {
+                            item.Selected = (item.Text == measurements[index].ID.ToString());
+                            if (item.Selected)
+                            {
+                                item.EnsureVisible();
+                            }
+                        }
+                    }
+
+                    drawingPanel.Invalidate();
+                }
+                else
+                {
+                    // Clicked on empty space - deselect
+                    measurementService.DeselectAllMeasurements(measurements, measurementsList,
+                        ref selectedMeasurement, ref selectedMeasurementIndex);
+                    drawingPanel.Invalidate();
+                }
+                return;
             }
         }
-
         private void DrawingPanel_MouseLeave(object sender, EventArgs e)
         {
             hoverPoint = null;
@@ -886,6 +1053,11 @@ namespace kinectProject
 
         #region Measurement Creation and Handling
 
+
+        /// <summary>
+        /// Connect all points in order (P1→P2, P2→P3, ...)
+        /// </summary>
+
         private void HandleMeasurementCreation(Point location)
         {
             string measurementName = "";
@@ -897,17 +1069,27 @@ namespace kinectProject
                 case ToolMode.Line:
                     if (currentStartPoint == null)
                     {
-                        currentStartPoint = location;
-                        UpdateStatus("Click endpoint for line");
+                        // ✅ Snap to existing point if nearby
+                        var snappedPoint = FindNearbyPoint(location);
+                        currentStartPoint = snappedPoint ?? location;
+
+                        if (snappedPoint.HasValue)
+                            UpdateStatus("Snapped to point. Click endpoint for line");
+                        else
+                            UpdateStatus("Click endpoint for line");
                     }
                     else
                     {
+                        // ✅ Snap endpoint too
+                        var snappedEnd = FindNearbyPoint(location);
+                        Point endPoint = snappedEnd ?? location;
+
                         measurementName = $"L{measurementCounter++}";
                         newMeasurement = measurementService.CreateLineMeasurement(
-                            currentStartPoint.Value, location, measurementName, newId);
+                            currentStartPoint.Value, endPoint, measurementName, newId);
 
                         measurementName = measurementService.PromptForRename(
-                            measurementName, autoRenameEnabled, ref autoRenameEnabled);
+                            measurementName, autoRenameDisabled, ref autoRenameDisabled);
                         newMeasurement.Name = measurementName;
 
                         measurements.Add(newMeasurement);
@@ -920,13 +1102,12 @@ namespace kinectProject
                         UpdateStatus($"Line created: {measurementName}");
                     }
                     break;
-
                 case ToolMode.Point:
                     measurementName = $"P{measurementCounter++}";
                     newMeasurement = measurementService.CreatePointMeasurement(location, measurementName, newId);
 
                     measurementName = measurementService.PromptForRename(
-                        measurementName, autoRenameEnabled, ref autoRenameEnabled);
+                        measurementName, autoRenameDisabled, ref autoRenameDisabled);
                     newMeasurement.Name = measurementName;
 
                     measurements.Add(newMeasurement);
@@ -950,7 +1131,7 @@ namespace kinectProject
                     {
                         measurementName = $"A{measurementCounter}";
                         measurementName = measurementService.PromptForRename(
-                            measurementName, autoRenameEnabled, ref autoRenameEnabled);
+                            measurementName, autoRenameDisabled, ref autoRenameDisabled);
 
                         Measurement firstSegment = measurementService.CreateAngleMeasurement(
                             angleVertex.Value, angleFirstPoint.Value, measurementName, newId);
@@ -982,7 +1163,7 @@ namespace kinectProject
                             currentStartPoint.Value, location, measurementName, newId, null);
 
                         measurementName = measurementService.PromptForRename(
-                            measurementName, autoRenameEnabled, ref autoRenameEnabled);
+                            measurementName, autoRenameDisabled, ref autoRenameDisabled);
                         newMeasurement.Name = measurementName;
 
                         measurements.Add(newMeasurement);
@@ -1005,27 +1186,34 @@ namespace kinectProject
                 case ToolMode.Distance:
                     if (currentStartPoint == null)
                     {
-                        currentStartPoint = location;
-                        UpdateStatus("Click endpoint for distance measurement");
+                        var snappedPoint = FindNearbyPoint(location);
+                        currentStartPoint = snappedPoint ?? location;
+
+                        if (snappedPoint.HasValue)
+                            UpdateStatus("Snapped to point. Click endpoint for distance");
+                        else
+                            UpdateStatus("Click endpoint for distance measurement");
                     }
                     else
                     {
+                        var snappedEnd = FindNearbyPoint(location);
+                        Point endPoint = snappedEnd ?? location;
+
                         measurementName = $"D{measurementCounter++}";
                         newMeasurement = measurementService.CreateDistanceMeasurement(
-                            currentStartPoint.Value, location, measurementName, newId);
+                            currentStartPoint.Value, endPoint, measurementName, newId);
 
                         measurementName = measurementService.PromptForRename(
-                            measurementName, autoRenameEnabled, ref autoRenameEnabled);
+          measurementName, autoRenameDisabled, ref autoRenameDisabled);
                         newMeasurement.Name = measurementName;
 
                         measurements.Add(newMeasurement);
                         currentStartPoint = null;
                         UpdateMeasurementsList();
                         drawingPanel.Invalidate();
-                        UpdateStatus($"Distance measurement created: {measurementName}");
+                        UpdateStatus($"Distance created: {measurementName}");
                     }
                     break;
-
                 case ToolMode.Reference:
                     if (currentStartPoint == null)
                     {
@@ -1039,7 +1227,7 @@ namespace kinectProject
                             currentStartPoint.Value, location, measurementName, newId);
 
                         measurementName = measurementService.PromptForRename(
-                            measurementName, autoRenameEnabled, ref autoRenameEnabled);
+                            measurementName, autoRenameDisabled, ref autoRenameDisabled);
                         newMeasurement.Name = measurementName;
 
                         measurements.Add(newMeasurement);
@@ -1080,9 +1268,8 @@ namespace kinectProject
                             selectedLineForPerpendicular = measurements[lineIndex];
                             isSelectingBaseLine = true;
                             UpdateStatus("Base line selected. Now click to place perpendicular line endpoint");
-
                             measurementService.SelectMeasurement(lineIndex, measurements, measurementsList,
-                                ref selectedMeasurement, ref selectedMeasurementIndex);
+                                ref selectedMeasurement, ref selectedMeasurementIndex, ref isUpdatingSelection);
                             drawingPanel.Invalidate();
                         }
                         else
@@ -1103,7 +1290,7 @@ namespace kinectProject
                             if (perpLine.Type != MeasurementType.None)
                             {
                                 measurementName = measurementService.PromptForRename(
-                                    measurementName, autoRenameEnabled, ref autoRenameEnabled);
+                                    measurementName, autoRenameDisabled, ref autoRenameDisabled);
                                 perpLine.Name = measurementName;
 
                                 measurements.Add(perpLine);
@@ -1140,7 +1327,7 @@ namespace kinectProject
                 {
                     string currentName = measurements[index].Name;
                     string newName = measurementService.PromptForRename(
-                        currentName, autoRenameEnabled, ref autoRenameEnabled);
+                        currentName, autoRenameDisabled, ref autoRenameDisabled);
 
                     if (newName != currentName)
                     {
@@ -1255,6 +1442,20 @@ namespace kinectProject
                 ref selectedMeasurement, ref selectedMeasurementIndex);
         }
 
+        /// <summary>
+        /// Helper to create a line between two measurement points
+        /// </summary>
+        private void CreateLineBetweenTwoPoints(Measurement p1, Measurement p2)
+        {
+            string lineName = $"L{measurementCounter++}";
+
+            Measurement lineMeasurement = new Measurement(
+                p1.Start, p2.Start, lineName, MeasurementType.Line, idCounter++);
+
+            measurements.Add(lineMeasurement);
+            UpdateStatus($"Line created: {p1.Name} → {p2.Name}");
+        }
+
         #endregion
 
         #region Hover Info
@@ -1270,7 +1471,7 @@ namespace kinectProject
                 hoverPoint = intersection.Value.Location;
 
                 StringBuilder sb = new StringBuilder();
-                sb.AppendLine($"Point P{intersection.Value.ID} ({intersection.Value.Type})");
+                sb.AppendLine($"Point I{intersection.Value.ID} ({intersection.Value.Type})");
                 sb.AppendLine($"Lines: {string.Join(", ", intersection.Value.LineIDs.Select(id => $"L{id}"))}");
 
                 if (intersection.Value.Angles.Count > 0)
@@ -1311,22 +1512,49 @@ namespace kinectProject
 
         private void MeasurementsList_SelectedIndexChanged(object sender, EventArgs e)
         {
-            measurementService.DeselectAllMeasurements(measurements, measurementsList,
-                ref selectedMeasurement, ref selectedMeasurementIndex);
+            if (isUpdatingSelection) return; // ✅ Prevent recursion
+            if (measurementsList.SelectedItems.Count == 0) return;
 
-            if (measurementsList.SelectedItems.Count > 0)
+            isUpdatingSelection = true;
+
+            int selectedId = int.Parse(measurementsList.SelectedItems[0].Text);
+            int index = measurements.FindIndex(m => m.ID == selectedId);
+
+            if (index >= 0 && index < measurements.Count)
             {
-                int selectedId = int.Parse(measurementsList.SelectedItems[0].Text);
-                int index = measurements.FindIndex(m => m.ID == selectedId);
-
-                if (index >= 0)
+                // Deselect others
+                for (int i = 0; i < measurements.Count; i++)
                 {
-                    measurementService.SelectMeasurement(index, measurements, measurementsList,
-                        ref selectedMeasurement, ref selectedMeasurementIndex);
+                    Measurement m = measurements[i];
+                    m.IsSelected = (i == index);
+                    measurements[i] = m;
                 }
+
+                selectedMeasurementIndex = index;
+                selectedMeasurement = measurements[index];
+
+                drawingPanel.Invalidate();
+                UpdateStatus($"Selected: {measurements[index].Name}");
             }
 
-            drawingPanel.Invalidate();
+            isUpdatingSelection = false;
+        }
+
+        /// <summary>
+        /// Center the view on a specific point
+        /// </summary>
+        private void CenterViewOnPoint(Point point)
+        {
+            // Calculate the pan offset needed to center this point
+            PointF imagePoint = new PointF(point.X, point.Y);
+            PointF screenCenter = new PointF(drawingPanel.Width / 2f, drawingPanel.Height / 2f);
+            PointF transformedPoint = calcService.TransformPointToScreen(imagePoint, transformMatrix);
+
+            // Adjust pan to move the point to center
+            panOffset.X += screenCenter.X - transformedPoint.X;
+            panOffset.Y += screenCenter.Y - transformedPoint.Y;
+
+            UpdateTransformationMatrices();
         }
 
         private void UpdateMeasurementsList()
@@ -1418,6 +1646,25 @@ namespace kinectProject
                 {
                     case MeasurementType.Point:
                         g.FillEllipse(brush, m.Start.X - pointSize / 2, m.Start.Y - pointSize / 2, pointSize, pointSize);
+
+                        // ✅ Extra highlight ring for selected point
+                        if (m.IsSelected)
+                        {
+                            using (Pen highlightPen = new Pen(Color.Yellow, 2))
+                            {
+                                int highlightSize = pointSize + 8;
+                                g.DrawEllipse(highlightPen,
+                                    m.Start.X - highlightSize / 2,
+                                    m.Start.Y - highlightSize / 2,
+                                    highlightSize, highlightSize);
+                            }
+                        }
+
+                        // Show name on hover or selected
+                        if (m.IsSelected || (hoverMeasurement.HasValue && hoverMeasurement.Value.ID == m.ID))
+                        {
+                            g.FillEllipse(brush, m.Start.X - pointSize / 2, m.Start.Y - pointSize / 2, pointSize, pointSize);
+                        }
                         break;
 
                     case MeasurementType.Line:
@@ -1520,28 +1767,31 @@ namespace kinectProject
                     g.FillEllipse(brush, point.Location.X - pointSize / 2, point.Location.Y - pointSize / 2, pointSize, pointSize);
                     g.DrawEllipse(pen, point.Location.X - pointSize / 2, point.Location.Y - pointSize / 2, pointSize, pointSize);
 
-                    using (Font font = new Font("Arial", Math.Max(8, 10 / zoomFactor), FontStyle.Bold))
-                    using (Brush textBrush = new SolidBrush(Color.White))
-                    using (Brush bgBrush = new SolidBrush(Color.FromArgb(200, Color.Black)))
+                    // ✅ Only show ID on hover or when highlighted
+                    if (isHighlighted)
                     {
-                        string idText = $"P{point.ID}";
-                        SizeF textSize = g.MeasureString(idText, font);
-                        RectangleF textRect = new RectangleF(
-                            point.Location.X - textSize.Width / 2,
-                            point.Location.Y + pointSize + 2,
-                            textSize.Width + 4, textSize.Height);
+                        using (Font font = new Font("Arial", Math.Max(8, 10 / zoomFactor), FontStyle.Bold))
+                        using (Brush textBrush = new SolidBrush(Color.White))
+                        using (Brush bgBrush = new SolidBrush(Color.FromArgb(200, Color.Black)))
+                        {
+                            string idText = $"P{point.ID}";
+                            SizeF textSize = g.MeasureString(idText, font);
+                            RectangleF textRect = new RectangleF(
+                                point.Location.X - textSize.Width / 2,
+                                point.Location.Y + pointSize + 2,
+                                textSize.Width + 4, textSize.Height);
 
-                        g.FillRectangle(bgBrush, textRect);
-                        g.DrawString(idText, font, textBrush,
-                            point.Location.X - textSize.Width / 2 + 2,
-                            point.Location.Y + pointSize + 4);
+                            g.FillRectangle(bgBrush, textRect);
+                            g.DrawString(idText, font, textBrush,
+                                point.Location.X - textSize.Width / 2 + 2,
+                                point.Location.Y + pointSize + 4);
+                        }
                     }
                 }
             }
 
             DrawBodyLandmarks(g);
         }
-
         private void DrawBodyLandmarks(Graphics g)
         {
             if (bodyLandmarks.Count == 0) return;
@@ -1607,12 +1857,27 @@ namespace kinectProject
 
         private void DrawCurrentToolPreview(Graphics g)
         {
+            // In DrawCurrentToolPreview, add this at the beginning:
             Point currentPos = drawingPanel.PointToClient(Cursor.Position);
             PointF imageCurrentPos = calcService.TransformPointToImage(currentPos, inverseTransform);
 
             if (!calcService.IsValidPoint(imageCurrentPos)) return;
 
             Point imagePoint = new Point((int)imageCurrentPos.X, (int)imageCurrentPos.Y);
+
+            // ✅ Show snap indicator when near a point
+            var snapPoint = FindNearbyPoint(imagePoint);
+            if (snapPoint.HasValue)
+            {
+                using (Pen snapPen = new Pen(Color.Yellow, 2))
+                {
+                    g.DrawEllipse(snapPen,
+                        snapPoint.Value.X - 12, snapPoint.Value.Y - 12,
+                        24, 24);
+                }
+                // Use the snapped point for preview
+                imagePoint = snapPoint.Value;
+            }
 
             // Connection line preview
             if (isCreatingLineBetweenPoints && selectedPointForLine.HasValue)
@@ -1842,6 +2107,31 @@ namespace kinectProject
         private void BodyPictureAnalyzer_Load(object sender, EventArgs e)
         {
             UpdateStatus("Application started. Import an image to begin.");
+        }
+
+
+        /// <summary>
+        /// Find the nearest existing point measurement within snap distance
+        /// </summary>
+        private Point? FindNearbyPoint(Point clickPoint, int snapDistance = 15)
+        {
+            Point? nearestPoint = null;
+            double minDistance = snapDistance;
+
+            foreach (var m in measurements)
+            {
+                if (m.Type == MeasurementType.Point)
+                {
+                    double distance = calcService.CalculateDistance(clickPoint, m.Start);
+                    if (distance < minDistance)
+                    {
+                        minDistance = distance;
+                        nearestPoint = m.Start;
+                    }
+                }
+            }
+
+            return nearestPoint;
         }
 
         #endregion

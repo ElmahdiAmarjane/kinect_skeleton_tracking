@@ -140,17 +140,21 @@ namespace kinectProject
         /// Create a measurement from detected points
         /// </summary>
         public void CreateMeasurementsFromDetectedPoints(
-            List<DetectedPoint> detectedPoints,
-            List<Measurement> measurements,
-            ref int idCounter,
-            bool autoRenameEnabled,
-            ref bool autoRenameDisabled)
+      List<DetectedPoint> detectedPoints,
+      List<Measurement> measurements,
+      ref int idCounter,
+      ref bool autoRenameDisabled)
         {
+            // Get the next available point number
+            int existingPointCount = measurements.Count(m => m.Type == MeasurementType.Point);
+
             foreach (var detectedPoint in detectedPoints)
             {
-                string pointName = $"P{detectedPoint.ID}";
+                // Use continuous numbering
+                string pointName = $"P{existingPointCount + 1}";
+                existingPointCount++;
 
-                if (autoRenameEnabled)
+                if (!autoRenameDisabled)
                 {
                     using (var renameDialog = new AutoRenameDialog(pointName))
                     {
@@ -164,6 +168,7 @@ namespace kinectProject
                                 autoRenameDisabled = true;
                             }
                         }
+                        // If Cancel, keep default name
                     }
                 }
 
@@ -177,7 +182,6 @@ namespace kinectProject
                 measurements.Add(measurement);
             }
         }
-
         /// <summary>
         /// Create a line between two detected points
         /// </summary>
@@ -574,29 +578,35 @@ namespace kinectProject
             List<Measurement> measurements,
             ListView measurementsList,
             ref Measurement? selectedMeasurement,
-            ref int selectedMeasurementIndex)
+            ref int selectedMeasurementIndex,
+            ref bool isUpdatingSelection) // ✅ Add this parameter
         {
-            DeselectAllMeasurements(measurements, measurementsList, ref selectedMeasurement, ref selectedMeasurementIndex);
-
             if (index >= 0 && index < measurements.Count)
             {
-                Measurement m = measurements[index];
-                m.IsSelected = true;
-                measurements[index] = m;
-                selectedMeasurementIndex = index;
-                selectedMeasurement = m;
+                // Deselect all
+                for (int i = 0; i < measurements.Count; i++)
+                {
+                    Measurement m = measurements[i];
+                    m.IsSelected = (i == index);
+                    measurements[i] = m;
+                }
 
-                // Update ListView selection
+                selectedMeasurementIndex = index;
+                selectedMeasurement = measurements[index];
+
+                // Update ListView without triggering event
                 if (measurementsList != null)
                 {
+                    isUpdatingSelection = true;
                     foreach (ListViewItem item in measurementsList.Items)
                     {
-                        item.Selected = (item.Text == m.ID.ToString());
+                        item.Selected = (item.Text == measurements[index].ID.ToString());
+                        if (item.Selected) item.EnsureVisible();
                     }
+                    isUpdatingSelection = false;
                 }
             }
         }
-
         #endregion
 
         #region Scale and Reference
@@ -916,12 +926,15 @@ namespace kinectProject
 
             measurementsList.Items.Clear();
 
-            var sortedMeasurements = measurements
+            // Group angle segments by ID so they only show once
+            var groupedMeasurements = measurements
+                .GroupBy(m => m.ID)
+                .Select(g => g.First()) // Take only first segment of each group
                 .OrderBy(m => m.AngleValue.HasValue)
                 .ThenBy(m => m.ID)
                 .ToList();
 
-            foreach (var m in sortedMeasurements)
+            foreach (var m in groupedMeasurements)
             {
                 string typeText = GetMeasurementTypeString(m.Type);
 
@@ -930,7 +943,7 @@ namespace kinectProject
                     typeText = "Intersection Angle";
                 }
 
-                string valueText = GetMeasurementValueText(m, isReferenceSet, pixelToRealRatio, measurements); // ✅ Pass full list
+                string valueText = GetMeasurementValueText(m, isReferenceSet, pixelToRealRatio, measurements);
 
                 ListViewItem item = new ListViewItem(m.ID.ToString());
                 item.SubItems.Add(typeText);

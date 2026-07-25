@@ -436,7 +436,7 @@ namespace kinectProject
 
             // Title
             ToolStripMenuItem titleItem = new ToolStripMenuItem(
-                $"📐 Point P{intersection.ID} - {intersection.LineIDs.Count} lines");
+                $"📐 Intersection I{intersection.ID} - {intersection.LineIDs.Count} lines");
             titleItem.Enabled = false;
             titleItem.Font = new Font("Arial", 9, FontStyle.Bold);
             contextMenu.Items.Add(titleItem);
@@ -512,7 +512,7 @@ namespace kinectProject
             }
 
             StringBuilder sb = new StringBuilder();
-            sb.AppendLine($"=== INTERSECTION POINT P{intersection.ID} ===");
+            sb.AppendLine($"=== INTERSECTION POINT I{intersection.ID} ===");
             sb.AppendLine($"Type: {intersection.Type}");
             sb.AppendLine($"Coordinates: ({intersection.Location.X}, {intersection.Location.Y})");
             sb.AppendLine($"Lines involved: {string.Join(", ", intersection.LineIDs.Select(id => $"L{id}"))}");
@@ -608,7 +608,7 @@ namespace kinectProject
             foreach (var ip in intersectionPoints.OrderBy(p => p.ID))
             {
                 sb.AppendLine();
-                sb.AppendLine($"Intersection Point P{ip.ID}");
+                sb.AppendLine($"Intersection Point I{ip.ID}");
                 sb.AppendLine($"Type: {ip.Type}");
                 sb.AppendLine($"Coordinates: ({ip.Location.X}, {ip.Location.Y})");
                 sb.AppendLine($"Lines involved: {string.Join(", ", ip.LineIDs.Select(id => $"L{id}"))}");
@@ -705,7 +705,7 @@ namespace kinectProject
                     using (Brush textBrush = new SolidBrush(Color.White))
                     using (Brush bgBrush = new SolidBrush(Color.FromArgb(200, Color.Black)))
                     {
-                        string idText = $"P{ip.ID}";
+                        string idText = $"I{ip.ID}";
                         SizeF textSize = g.MeasureString(idText, font);
 
                         RectangleF textRect = new RectangleF(
