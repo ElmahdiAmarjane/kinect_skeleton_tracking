@@ -978,15 +978,15 @@ namespace kinectProject
             }
 
             // 4. MANUAL POINT ADDITION
-            if (currentTool == ToolMode.Point && e.Button == MouseButtons.Left)
-            {
-                detectionService.HandleManualPointDetection(
-                    imagePoint, selectedColor, customColor,
-                    !autoRenameDisabled, detectedPoints, measurements, ref idCounter);
-                UpdateMeasurementsList();
-                drawingPanel.Invalidate();
-                return;
-            }
+            //if (currentTool == ToolMode.Point && e.Button == MouseButtons.Left)
+            //{
+            //    detectionService.HandleManualPointDetection(
+            //        imagePoint, selectedColor, customColor,
+            //        !autoRenameDisabled, detectedPoints, measurements, ref idCounter);
+            //    UpdateMeasurementsList();
+            //    drawingPanel.Invalidate();
+            //    return;
+            //}
 
             // 5. MEASUREMENT CREATION
             if (currentTool != ToolMode.None && e.Button == MouseButtons.Left)
@@ -1090,7 +1090,7 @@ namespace kinectProject
                             currentStartPoint.Value, endPoint, measurementName, newId);
 
                         measurementName = measurementService.PromptForRename(
-                            measurementName, autoRenameDisabled, ref autoRenameDisabled);
+                            measurementName, ref autoRenameDisabled);
                         newMeasurement.Name = measurementName;
 
                         measurements.Add(newMeasurement);
@@ -1107,21 +1107,29 @@ namespace kinectProject
                     int existingPoints = measurements.Count(m => m.Type == MeasurementType.Point);
                     measurementName = $"P{existingPoints + 1}";
 
-                    newMeasurement = measurementService.CreatePointMeasurement(location, measurementName, newId);
+                    // ✅ DEBUG - writes to Output window
+                    System.Diagnostics.Debug.WriteLine($"=== POINT TOOL ===");
+                    System.Diagnostics.Debug.WriteLine($"existingPoints: {existingPoints}");
+                    System.Diagnostics.Debug.WriteLine($"measurementName: {measurementName}");
+                    System.Diagnostics.Debug.WriteLine($"autoRenameDisabled: {autoRenameDisabled}");
 
-                    // ✅ Always set name first, then optionally rename
+                    newMeasurement = measurementService.CreatePointMeasurement(location, measurementName, newId);
                     newMeasurement.Name = measurementName;
 
                     if (!autoRenameDisabled)
                     {
-                        string newName = measurementService.PromptForRename(measurementName, autoRenameDisabled, ref autoRenameDisabled);
+                        System.Diagnostics.Debug.WriteLine($"Calling PromptForRename with: {measurementName}");
+                        string newName = measurementService.PromptForRename(measurementName, ref autoRenameDisabled);
+                        System.Diagnostics.Debug.WriteLine($"PromptForRename returned: {newName}");
                         newMeasurement.Name = string.IsNullOrWhiteSpace(newName) ? measurementName : newName;
                     }
 
                     measurements.Add(newMeasurement);
+                    System.Diagnostics.Debug.WriteLine($"Added: {newMeasurement.Name}, Total points: {measurements.Count(m => m.Type == MeasurementType.Point)}");
+
                     UpdateMeasurementsList();
                     drawingPanel.Invalidate();
-                    UpdateStatus($"Point created: {newMeasurement.Name}");
+                    UpdateStatus($"Point created: {measurementName}");
                     break;
                 case ToolMode.Angle:
                     if (angleVertex == null)
@@ -1138,7 +1146,7 @@ namespace kinectProject
                     {
                         measurementName = $"A{measurementCounter}";
                         measurementName = measurementService.PromptForRename(
-                            measurementName, autoRenameDisabled, ref autoRenameDisabled);
+                            measurementName, ref autoRenameDisabled);
 
                         Measurement firstSegment = measurementService.CreateAngleMeasurement(
                             angleVertex.Value, angleFirstPoint.Value, measurementName, newId);
@@ -1170,7 +1178,7 @@ namespace kinectProject
                             currentStartPoint.Value, location, measurementName, newId, null);
 
                         measurementName = measurementService.PromptForRename(
-                            measurementName, autoRenameDisabled, ref autoRenameDisabled);
+                            measurementName, ref autoRenameDisabled);
                         newMeasurement.Name = measurementName;
 
                         measurements.Add(newMeasurement);
@@ -1211,7 +1219,7 @@ namespace kinectProject
                             currentStartPoint.Value, endPoint, measurementName, newId);
 
                         measurementName = measurementService.PromptForRename(
-          measurementName, autoRenameDisabled, ref autoRenameDisabled);
+          measurementName, ref autoRenameDisabled);
                         newMeasurement.Name = measurementName;
 
                         measurements.Add(newMeasurement);
@@ -1234,7 +1242,7 @@ namespace kinectProject
                             currentStartPoint.Value, location, measurementName, newId);
 
                         measurementName = measurementService.PromptForRename(
-                            measurementName, autoRenameDisabled, ref autoRenameDisabled);
+                            measurementName, ref autoRenameDisabled);
                         newMeasurement.Name = measurementName;
 
                         measurements.Add(newMeasurement);
@@ -1297,7 +1305,7 @@ namespace kinectProject
                             if (perpLine.Type != MeasurementType.None)
                             {
                                 measurementName = measurementService.PromptForRename(
-                                    measurementName, autoRenameDisabled, ref autoRenameDisabled);
+                                    measurementName, ref autoRenameDisabled);
                                 perpLine.Name = measurementName;
 
                                 measurements.Add(perpLine);
@@ -1334,7 +1342,7 @@ namespace kinectProject
                 {
                     string currentName = measurements[index].Name;
                     string newName = measurementService.PromptForRename(
-                        currentName, autoRenameDisabled, ref autoRenameDisabled);
+                        currentName, ref autoRenameDisabled);
 
                     if (newName != currentName)
                     {

@@ -317,29 +317,18 @@ namespace kinectProject
         /// <summary>
         /// Prompt for rename with dialog
         /// </summary>
-        public string PromptForRename(string defaultName, bool autoRenameEnabled, ref bool autoRenameDisabled)
+        public string PromptForRename(string defaultName, ref bool autoRenameDisabled)
         {
-            if (!autoRenameEnabled)
-            {
-                return defaultName;
-            }
+            if (autoRenameDisabled) return defaultName;
 
             using (var renameDialog = new AutoRenameDialog(defaultName))
             {
                 if (renameDialog.ShowDialog() == DialogResult.OK)
                 {
-                    if (renameDialog.DontAskAgain)
-                    {
-                        autoRenameDisabled = true;
-                    }
-
-                    return string.IsNullOrWhiteSpace(renameDialog.NewName) ?
-                           defaultName : renameDialog.NewName.Trim();
+                    if (renameDialog.DontAskAgain) autoRenameDisabled = true;
+                    return string.IsNullOrWhiteSpace(renameDialog.NewName) ? defaultName : renameDialog.NewName.Trim();
                 }
-                else
-                {
-                    return defaultName;
-                }
+                return defaultName;
             }
         }
 
