@@ -961,6 +961,7 @@ namespace kinectProject
                     detectedPoints, measurements, ref idCounter,
                     ref autoRenameDisabled);
 
+                detectedPoints.Clear();
                 UpdateMeasurementsList();
                 drawingPanel.Invalidate();
                 UpdateStatus($"✅ {detectedPoints.Count} markers added");
@@ -1103,19 +1104,25 @@ namespace kinectProject
                     }
                     break;
                 case ToolMode.Point:
-                    measurementName = $"P{measurementCounter++}";
+                    int existingPoints = measurements.Count(m => m.Type == MeasurementType.Point);
+                    measurementName = $"P{existingPoints + 1}";
+
                     newMeasurement = measurementService.CreatePointMeasurement(location, measurementName, newId);
 
-                    measurementName = measurementService.PromptForRename(
-                        measurementName, autoRenameDisabled, ref autoRenameDisabled);
+                    // ✅ Always set name first, then optionally rename
                     newMeasurement.Name = measurementName;
+
+                    if (!autoRenameDisabled)
+                    {
+                        string newName = measurementService.PromptForRename(measurementName, autoRenameDisabled, ref autoRenameDisabled);
+                        newMeasurement.Name = string.IsNullOrWhiteSpace(newName) ? measurementName : newName;
+                    }
 
                     measurements.Add(newMeasurement);
                     UpdateMeasurementsList();
                     drawingPanel.Invalidate();
-                    UpdateStatus($"Point created: {measurementName}");
+                    UpdateStatus($"Point created: {newMeasurement.Name}");
                     break;
-
                 case ToolMode.Angle:
                     if (angleVertex == null)
                     {
@@ -1645,28 +1652,30 @@ namespace kinectProject
                 switch (m.Type)
                 {
                     case MeasurementType.Point:
-                        g.FillEllipse(brush, m.Start.X - pointSize / 2, m.Start.Y - pointSize / 2, pointSize, pointSize);
+                        int dotSize = Math.Max(3, Math.Min((int)(6 / zoomFactor), 12));
+                        int ringThickness = Math.Max(1, Math.Min((int)(1.5 / zoomFactor), 2));
 
-                        // ✅ Extra highlight ring for selected point
-                        if (m.IsSelected)
+                        // ✅ Use float for precise positioning
+                        float cx = m.Start.X;
+                        float cy = m.Start.Y;
+                        float halfDot = dotSize / 2f;
+                        float halfRing = (dotSize + ringThickness) / 2f;
+
+                        // Red dot
+                        using (Brush dotBrush = new SolidBrush(Color.Red))
                         {
-                            using (Pen highlightPen = new Pen(Color.Yellow, 2))
-                            {
-                                int highlightSize = pointSize + 8;
-                                g.DrawEllipse(highlightPen,
-                                    m.Start.X - highlightSize / 2,
-                                    m.Start.Y - highlightSize / 2,
-                                    highlightSize, highlightSize);
-                            }
+                            g.FillEllipse(dotBrush, cx - halfDot, cy - halfDot, dotSize, dotSize);
                         }
 
-                        // Show name on hover or selected
+                        // Yellow ring
                         if (m.IsSelected || (hoverMeasurement.HasValue && hoverMeasurement.Value.ID == m.ID))
                         {
-                            g.FillEllipse(brush, m.Start.X - pointSize / 2, m.Start.Y - pointSize / 2, pointSize, pointSize);
+                            using (Pen yellowPen = new Pen(Color.Yellow, ringThickness))
+                            {
+                                g.DrawEllipse(yellowPen, cx - halfRing, cy - halfRing, dotSize + ringThickness, dotSize + ringThickness);
+                            }
                         }
                         break;
-
                     case MeasurementType.Line:
                         g.DrawLine(pen, m.Start, m.End);
                         g.FillEllipse(brush, m.Start.X - pointSize / 2, m.Start.Y - pointSize / 2, pointSize, pointSize);
@@ -1854,10 +1863,8 @@ namespace kinectProject
                 g.FillEllipse(Brushes.Red, gridOrigin.X - 5, gridOrigin.Y - 5, 10, 10);
             }
         }
-
         private void DrawCurrentToolPreview(Graphics g)
         {
-            // In DrawCurrentToolPreview, add this at the beginning:
             Point currentPos = drawingPanel.PointToClient(Cursor.Position);
             PointF imageCurrentPos = calcService.TransformPointToImage(currentPos, inverseTransform);
 
@@ -1865,20 +1872,30 @@ namespace kinectProject
 
             Point imagePoint = new Point((int)imageCurrentPos.X, (int)imageCurrentPos.Y);
 
-            // ✅ Show snap indicator when near a point
-            var snapPoint = FindNearbyPoint(imagePoint);
-            if (snapPoint.HasValue)
-            {
-                using (Pen snapPen = new Pen(Color.Yellow, 2))
-                {
-                    g.DrawEllipse(snapPen,
-                        snapPoint.Value.X - 12, snapPoint.Value.Y - 12,
-                        24, 24);
-                }
-                // Use the snapped point for preview
-                imagePoint = snapPoint.Value;
-            }
+            // ✅ Only show snap indicator for Line, Distance, Angle, Reference tools (NOT Point tool)
+            bool showSnap = currentTool == ToolMode.Line ||
+                            currentTool == ToolMode.Distance ||
+                            currentTool == ToolMode.Angle ||
+                            currentTool == ToolMode.Reference;
 
+            if (showSnap)
+            {
+                var snapPoint = FindNearbyPoint(imagePoint);
+                if (snapPoint.HasValue)
+                {
+                    float snapSize = 6f;
+                    float halfSnap = snapSize / 2f;
+
+                    using (Pen snapPen = new Pen(Color.Yellow, 1.5f))
+                    {
+                        g.DrawEllipse(snapPen,
+                            snapPoint.Value.X - halfSnap,
+                            snapPoint.Value.Y - halfSnap,
+                            snapSize, snapSize);
+                    }
+                    imagePoint = snapPoint.Value;
+                }
+            }
             // Connection line preview
             if (isCreatingLineBetweenPoints && selectedPointForLine.HasValue)
             {
@@ -1942,7 +1959,6 @@ namespace kinectProject
                 }
             }
         }
-
         private void DrawAngleArcPreview(Graphics g, PointF vertex, PointF point1, PointF point2)
         {
             try
@@ -2113,7 +2129,7 @@ namespace kinectProject
         /// <summary>
         /// Find the nearest existing point measurement within snap distance
         /// </summary>
-        private Point? FindNearbyPoint(Point clickPoint, int snapDistance = 15)
+        private Point? FindNearbyPoint(Point clickPoint, int snapDistance = 5)
         {
             Point? nearestPoint = null;
             double minDistance = snapDistance;

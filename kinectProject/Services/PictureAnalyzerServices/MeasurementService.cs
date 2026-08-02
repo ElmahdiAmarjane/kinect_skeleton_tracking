@@ -818,7 +818,7 @@ namespace kinectProject
             switch (type)
             {
                 case MeasurementType.Line: return Color.LimeGreen;
-                case MeasurementType.Point: return Color.Magenta;
+                case MeasurementType.Point: return Color.LimeGreen;
                 case MeasurementType.Angle: return Color.Cyan;
                 case MeasurementType.AngleWithAxis: return Color.Blue;
                 case MeasurementType.Distance: return Color.Orange;

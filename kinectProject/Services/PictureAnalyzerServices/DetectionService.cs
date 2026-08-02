@@ -1117,7 +1117,7 @@ namespace kinectProject
                 newId
             );
 
-            detectedPoints.Add(newPoint);
+         //   detectedPoints.Add(newPoint);
 
             string pointName = $"P{newId}";
 
